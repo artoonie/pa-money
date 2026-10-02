@@ -1,0 +1,5 @@
+donor_key,entity_id,reason,evidence,submitted_by
+JEFFREY YASS|BALA CYNWYD|PA,E0001,"Primary spelling; employer reported as self employed, Bala Cynwyd is SIG's headquarters",2024 Students First PAC filings (filer 2010165),seed
+JEFFERY YASS|HAVERFORD|PA,E0001,"Typo of Jeffrey; employer reported as Mng Director, Susquehanna Partners; Haverford is his residence",2024 Chester County Republican Committee filing (filer 7900259),seed
+COMMONWEALTH CHILDREN CHOICE FUND|HARRISBURG|PA,E0002,"Same committee, same Harrisburg address, possessive dropped",2024 Dave Sunday for AG filings (filer 20230211),seed
+COMMONWEALTH CHILDRENS CHOICE FUND|HARRISBURG|PA,E0002,"Same committee, possessive without apostrophe",2024 Dave Sunday for AG filings (filer 20230211),seed

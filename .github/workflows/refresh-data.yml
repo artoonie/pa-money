@@ -1,0 +1,73 @@
+name: Refresh data
+
+# Rebuilds the database from the state's export and loads it into remote D1.
+# Runs on the first of each month and on demand. Also runs when cleanup rules
+# change on main, since the rules are applied at build time.
+#
+# A full 2000-to-present build needs several GB of disk and a few GB of RAM,
+# which fits a standard GitHub runner, but loading multiple gigabytes into D1
+# through wrangler can take hours. Start with a short year range to measure.
+
+on:
+  schedule:
+    - cron: "17 6 1 * *"
+  push:
+    branches: [main]
+    paths:
+      - "cleanup/**"
+      - "pipeline/**"
+  workflow_dispatch:
+    inputs:
+      years:
+        description: "Years to build, e.g. 2024 or 2020-2026 (blank = all)"
+        required: false
+        default: ""
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+
+      - name: Validate cleanup rules
+        run: python3 cleanup/validate.py
+
+      - name: Download exports
+        run: |
+          YEARS="${{ github.event.inputs.years }}"
+          if [ -n "$YEARS" ]; then python3 pipeline/download.py --years "$YEARS"; else python3 pipeline/download.py; fi
+
+      - name: Build database
+        run: |
+          YEARS="${{ github.event.inputs.years }}"
+          if [ -n "$YEARS" ]; then python3 pipeline/build.py --years "$YEARS"; else python3 pipeline/build.py; fi
+          ls -lh data/pa.sqlite
+
+      - name: Load into D1
+        run: scripts/deploy-db.sh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Keep the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: data/*.log
+          if-no-files-found: ignore

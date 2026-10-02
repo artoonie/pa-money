@@ -1,0 +1,10 @@
+name_normalized,kind,reason
+TOTAL OTHER CONTRIBUTIONS,aggregate,"Not a donor: filers use this placeholder for the unitemized total of contributions of $50 or less"
+UNITEMIZED,aggregate,"Placeholder for unitemized small contributions"
+UNITEMIZED CONTRIBUTIONS,aggregate,"Placeholder for unitemized small contributions"
+REPUBLICAN STATE LEADERSHIP COMMITTEE,committee,"National party committee reported on the individual schedule by some filers"
+REPUBLICAN ATTORNEYS GENERAL ASSOCIATION,committee,"527 political organization reported on the individual schedule by some filers"
+MISCELLANEOUS,aggregate,"Placeholder some filers use for a lump sum rather than a named donor"
+PA HDCC,committee,"Abbreviation of the Pennsylvania House Democratic Campaign Committee"
+PA HOUSE DEMOCRATIC CAMPAIGN COMMITTTEE,committee,"Pennsylvania House Democratic Campaign Committee, misspelled with three Ts in filings"
+DEMOCRACYFIRST,organization,"democracyFIRST, a political nonprofit, not an individual"

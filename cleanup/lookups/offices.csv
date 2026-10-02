@@ -1,0 +1,17 @@
+code,label,note
+GOV,Governor,
+LTG,Lieutenant Governor,
+ATT,Attorney General,"Verified: Dave Sunday, 2024"
+AUD,Auditor General,
+TRE,State Treasurer,
+STS,State Senate,
+STH,State House,"Most common office code; district in the district column"
+SPM,Supreme Court Justice,"Inferred from the search site's office list; unverified"
+SPJ,Superior Court Judge,"Inferred; unverified"
+CPJ,Commonwealth Court Judge,"Inferred; unverified"
+CPJP,Court of Common Pleas Judge,"Inferred; unverified"
+MCJ,Municipal Court Judge (Philadelphia),"Inferred; unverified"
+TCJ,Traffic Court Judge (Philadelphia),"Inferred; unverified"
+USC,U.S. Congress,"Inferred from code; federal candidates normally file with the FEC"
+USP,U.S. President,"Inferred from code; unverified"
+DED,Delegate to national convention,"Inferred; unverified"

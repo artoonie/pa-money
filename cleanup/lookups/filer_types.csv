@@ -1,0 +1,4 @@
+code,label,note
+1,Candidate,"Candidate's own filer record (e.g. filer 2024C0238 Dave Sunday, office ATT)"
+2,Committee,"Political committee, PAC or party committee (e.g. Pittsburgh DSA PAC)"
+3,Lobbyist,"Inferred from names in the data (individual names, no office); unverified"

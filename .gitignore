@@ -1,0 +1,10 @@
+data/
+node_modules/
+.wrangler/
+web/.dev.vars
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+__pycache__/
+.DS_Store

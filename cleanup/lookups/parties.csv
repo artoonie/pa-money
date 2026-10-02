@@ -1,0 +1,15 @@
+code,label,note
+DEM,Democratic,
+REP,Republican,
+OTH,Other,"Used by many PACs and non-partisan committees"
+LIB,Libertarian,
+GRN,Green,
+FWD,Forward,
+CST,Constitution,
+IND,Independent,
+ASP,American Solidarity,"Inferred; unverified"
+D/R,Democratic and Republican,"Cross-filed candidate, common for judicial races"
+R/D,Republican and Democratic,"Cross-filed candidate"
+NOA,No affiliation,"Inferred; unverified"
+NON,Non-partisan,"Inferred; unverified"
+NOP,No party,"Inferred; unverified"

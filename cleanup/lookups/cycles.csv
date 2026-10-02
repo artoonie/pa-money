@@ -1,0 +1,10 @@
+code,label,note
+1,Pre-primary (6th Tuesday before),"Verified against 2024 filing dates (filed around Mar 12, 2024)"
+2,Pre-primary (2nd Friday before),"Verified against 2024 filing dates (filed around Apr 12, 2024)"
+3,Post-primary (30 days after),"Verified against 2024 filing dates (filed around May 23, 2024)"
+4,Pre-election (6th Tuesday before),"Verified against 2024 filing dates (filed around Sep 24, 2024)"
+5,Pre-election (2nd Friday before),"Verified against 2024 filing dates (filed around Oct 25, 2024)"
+6,Post-election (30 days after),"Verified against 2024 filing dates (filed around Dec 5, 2024)"
+7,Annual report,"Filed in January for the prior year"
+8,Special election pre-election,"Inferred: 2024 code-8 reports cluster before the Jan/Feb and Sep 2024 special elections"
+9,Special election post-election,"Inferred: 2024 code-9 reports cluster about 30 days after special elections"

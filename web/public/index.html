@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PA Money</title>
+<meta name="description" content="Search Pennsylvania campaign finance filings by who gave and who received. Built from the Department of State's public export, with every data cleanup open for review.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap nav">
+    <a class="brand" href="/" data-link>
+      <span class="tile tile-pink">P</span><span class="tile tile-blue">A</span>
+      <span class="brand-name">Money</span>
+    </a>
+    <form class="nav-search" id="nav-search" role="search" action="/search" autocomplete="off">
+      <label for="nav-q" class="sr-only">Search candidates, committees, donors or employers</label>
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input id="nav-q" name="q" type="search" placeholder="Search a candidate, committee, donor or employer">
+      <div class="dropdown" id="nav-dropdown" hidden></div>
+    </form>
+    <nav class="nav-links" aria-label="Main">
+      <a href="/top" data-link>Recipients</a>
+      <a href="/donors" data-link>Donors</a>
+      <a href="/about" data-link>Data &amp; corrections</a>
+    </nav>
+  </div>
+</header>
+<main id="main" class="wrap"></main>
+<footer class="site-footer">
+  <div class="wrap">
+    <span>PA Money is an independent project built from public records. It is not affiliated with the Commonwealth of Pennsylvania.</span>
+    <span class="footer-links"><a href="/about" data-link>Methodology</a><a id="footer-repo" href="#" rel="noopener">Source &amp; corrections</a></span>
+  </div>
+</footer>
+<script src="/app.js"></script>
+</body>
+</html>

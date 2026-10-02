@@ -1,0 +1,27 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "pa-money",
+	"main": "src/index.js",
+	"compatibility_date": "2026-09-01",
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": [
+			"/api/*"
+		]
+	},
+	"d1_databases": [
+		{
+			"binding": "pa_money",
+			"database_name": "pa-money",
+			"database_id": "510233c1-9557-4301-856a-55cbd20fe53d"
+		}
+	],
+	"vars": {
+		"REPO_URL": "https://github.com/artoonie/pa-campaign-finance"
+	},
+	"observability": {
+		"enabled": true
+	}
+}

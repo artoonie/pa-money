@@ -1,0 +1,30 @@
+name: Validate cleanup rules
+
+on:
+  pull_request:
+    paths:
+      - "cleanup/**"
+  push:
+    branches: [main]
+    paths:
+      - "cleanup/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate rule files
+        run: python3 cleanup/validate.py
+      - name: Summarize what this change does
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "## Cleanup changes" >> "$GITHUB_STEP_SUMMARY"
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          git diff --stat "origin/${{ github.base_ref }}" -- cleanup/ >> "$GITHUB_STEP_SUMMARY"
+          echo '```diff' >> "$GITHUB_STEP_SUMMARY"
+          git diff "origin/${{ github.base_ref }}" -- cleanup/*.csv cleanup/lookups/*.csv | head -200 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

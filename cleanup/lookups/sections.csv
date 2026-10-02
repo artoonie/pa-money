@@ -1,0 +1,9 @@
+code,label,note
+IA,"Cash from political committees, $50.01 to $250","Schedule I Part A on form DSEB-502"
+IB,"Cash from all other sources, $50.01 to $250","Schedule I Part B"
+IC,"Cash from political committees, over $250","Schedule I Part C"
+ID,"Cash from all other sources, over $250","Schedule I Part D"
+IE,"Other receipts (refunds, interest, dividends)","Schedule I Part E; rare in the contributions file"
+IIF,"In-kind, $50.01 to $250","Schedule II Part F; small in-kind contributions"
+IIG,"In-kind, over $250","Schedule II Part G; large in-kind contributions such as ad buys"
+,"Unlabeled","Section left blank by the filer"
