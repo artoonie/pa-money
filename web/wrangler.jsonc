@@ -3,6 +3,15 @@
 	"name": "pa-money",
 	"main": "src/index.js",
 	"compatibility_date": "2026-09-01",
+	// Custom domain on a zone in this account: wrangler creates the DNS record and certificate on deploy.
+	"routes": [
+		{
+			"pattern": "pamoney.arminsamii.com",
+			"custom_domain": true
+		}
+	],
+	// Keep the pa-money.<subdomain>.workers.dev address too; set to false to serve only the custom domain.
+	"workers_dev": false,
 	"assets": {
 		"directory": "./public",
 		"binding": "ASSETS",
@@ -13,13 +22,13 @@
 	},
 	"d1_databases": [
 		{
-			"binding": "pa_money",
+			"binding": "DB",
 			"database_name": "pa-money",
-			"database_id": "510233c1-9557-4301-856a-55cbd20fe53d"
+			"database_id": "d524e330-1fb3-4f2c-8938-dbf8dc1a6be8"
 		}
 	],
 	"vars": {
-		"REPO_URL": "https://github.com/artoonie/pa-campaign-finance"
+		"REPO_URL": "https://github.com/artoonie/pa-money"
 	},
 	"observability": {
 		"enabled": true

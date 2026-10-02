@@ -1,8 +1,9 @@
 name: Refresh data
 
 # Rebuilds the database from the state's export and loads it into remote D1.
-# Runs on the first of each month and on demand. Also runs when cleanup rules
-# change on main, since the rules are applied at build time.
+# Runs on the first of each month and on demand (Actions tab -> Refresh data ->
+# Run workflow). Cleanup rules are applied at build time, so after merging a
+# cleanup change, run this by hand to put it on the site.
 #
 # A full 2000-to-present build needs several GB of disk and a few GB of RAM,
 # which fits a standard GitHub runner, but loading multiple gigabytes into D1
@@ -11,11 +12,6 @@ name: Refresh data
 on:
   schedule:
     - cron: "17 6 1 * *"
-  push:
-    branches: [main]
-    paths:
-      - "cleanup/**"
-      - "pipeline/**"
   workflow_dispatch:
     inputs:
       years:

@@ -81,8 +81,10 @@ done:
 - **deploy.yml** redeploys the Worker on every push to `main` that touches
   `web/`.
 - **refresh-data.yml** downloads the exports, rebuilds the database, and loads
-  it into D1 monthly, on demand, and whenever cleanup rules change. Trigger it
-  by hand first with a short year range to measure how long the D1 load takes.
+  it into D1 on the first of each month, or on demand from the Actions tab.
+  Cleanup rules are applied at build time, so run it by hand after merging a
+  correction you want on the site right away. Trigger it once with a short
+  year range first to measure how long the D1 load takes.
 
 Both need two repository secrets, set under Settings → Secrets and variables →
 Actions:
