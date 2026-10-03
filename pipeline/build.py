@@ -14,6 +14,8 @@ Steps:
 """
 import argparse
 import csv
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import datetime
 import glob
 import html
@@ -39,6 +41,12 @@ LOOKUP_FILES = {"cycle": "cycles.csv", "section": "sections.csv", "filer_type": 
 
 COMMITTEE_SECTIONS = ("IA", "IC")
 INKIND_SECTIONS = ("IIF", "IIG")
+# Placeholder names filers use for lump sums; these are not donors and are kept out of rankings.
+AGG_WORDS = re.compile(
+    r"\b(AGGREGATE|UNITEMIZED|NON PA|NON PENNSYLVANIA|OUT OF STATE|SEE PAPER FILING|SEE FEC FILING|FEC REPORT|"
+    r"TOTAL OTHER|MISCELLANEOUS|VARIOUS|NUMEROUS|MULTIPLE DONORS|SMALL CONTRIBUTIONS|LESS THAN|UNDER 50|UNDER 250|"
+    r"CONTRIBUTIONS OF|CONTRIBUTIONS FROM|ANONYMOUS)\b"
+)
 ORG_WORDS = re.compile(
     r"\b(PAC|COMMITT+E+|COMM|COM|FUND|HDCC|HRCC|SDCC|SRCC|DLCC|RSLC|DGA|RGA|RAGA|DAGA|ACTBLUE|WINRED|EMILY S LIST|ASSOC|ASSOCIATION|ASSN|UNION|LOCAL \d+|LLC|L L C|INC|CORP|"
     r"CORPORATION|LLP|LP|L P|COUNCIL|PARTNERS|PARTNERSHIP|GROUP|CO|COMPANY|CAUCUS|PARTY|DEMOCRATS|"
@@ -47,7 +55,8 @@ ORG_WORDS = re.compile(
     r"CAPITAL|MANAGEMENT|INVESTMENTS|CONSULTING|CONSULTANTS|LTD|PLLC|P C|DEVELOPMENT|CONSTRUCTION|CONTRACTORS|BUILDERS|"
     r"DISTRIBUTORS|CLUB|CENTER|CHURCH|SCHOOL|ESTATE|ESTATES|AGENCY|INSURANCE|HOSPITAL|HEALTH|MEDICAL|DENTAL|PHARMACY|"
     r"RESTAURANT|FARMS|FARM|MARKET|STORES|SUPPLY|LOGISTICS|TRUCKING|ENERGY|GAS|OIL|STEEL|MINING|MOTORS|AUTO|TOWNSHIP|"
-    r"BOROUGH|COUNTY|CITY OF|FRIENDS OF|CITIZENS FOR|COMMITTEE TO|PEOPLE FOR|VOTERS)\b"
+    r"BOROUGH|COUNTY|CITY OF|FRIENDS OF|CITIZENS FOR|COMMITTEE TO|PEOPLE FOR|VOTERS|COALITION|ORGANIZING|ORGANIZATION|"
+    r"ACTION|VICTORY|LEADERSHIP|MAJORITY|PROJECT|INSTITUTE|SOCIETY|ASSEMBLY|CONFERENCE|CHAMBER|BUREAU|GUILD|LODGE|POST \d+)\b"
 )
 
 
@@ -78,6 +87,14 @@ def ymd(s):
     if len(s) == 10 and s[4] == "-":
         return s
     return None
+
+
+def date_in_amount(amount, date):
+    """True when the amount field holds a YYYYMMDD date and the date field is empty (a column shift in some filings)."""
+    if date is not None or amount != int(amount) or not (19900101 <= amount <= 20301231):
+        return False
+    a = int(amount)
+    return 1 <= (a // 100) % 100 <= 12 and 1 <= a % 100 <= 31
 
 
 def intval(s):
@@ -241,7 +258,7 @@ class Builder:
         batch = []
         n = 0
         sql = ("INSERT INTO contribution (cf_id, filer_id, eyear, cycle, section, donor_id, contributor, city, state, zip, "
-               "occupation, employer, date, amount, description, is_current) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+               "occupation, employer, date, amount, description, is_current, flag) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
         for r in rows(zf, f"contrib_{year}.txt"):
             cf_id = intval(r.get("CAMPAIGNFINANCEID"))
             filer_id = clean(r.get("FILERID"))
@@ -262,7 +279,7 @@ class Builder:
                 d = ymd(r.get(dcol))
                 if a == 0 and dcol != "CONTDATE1":
                     continue
-                batch.append(base + (d, a, desc, is_current))
+                batch.append(base + (d, a, desc, is_current, "date_in_amount" if date_in_amount(a, d) else None))
                 n += 1
             if len(batch) >= BATCH:
                 self.flush_donors()
@@ -282,17 +299,19 @@ class Builder:
     def _load_simple(self, zf, year, suffix, table, namecol, NAME, DATE, AMT, DESC):
         batch = []
         n = 0
-        sql = (f"INSERT INTO {table} (cf_id, filer_id, eyear, cycle, {namecol}, city, state, zip, date, amount, description, is_current) "
-               "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+        flagged = table == "expense"
+        sql = (f"INSERT INTO {table} (cf_id, filer_id, eyear, cycle, {namecol}, city, state, zip, date, amount, description, is_current"
+               f"{', flag' if flagged else ''}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?{',?' if flagged else ''})")
         for r in rows(zf, suffix):
             cf_id = intval(r.get("CAMPAIGNFINANCEID"))
             filer_id = clean(r.get("FILERID"))
             if cf_id is None or not filer_id:
                 continue
             is_current = 1 if cf_id in self.current or not self._known_report(cf_id) else 0
-            batch.append((cf_id, filer_id, intval(r.get("EYEAR")) or year, intval(r.get("CYCLE")), clean(r.get(NAME)),
-                          clean(r.get("CITY")), clean(r.get("STATE")), clean(r.get("ZIPCODE")), ymd(r.get(DATE)),
-                          amt(r.get(AMT)), clean(r.get(DESC)), is_current))
+            d, a = ymd(r.get(DATE)), amt(r.get(AMT))
+            row = (cf_id, filer_id, intval(r.get("EYEAR")) or year, intval(r.get("CYCLE")), clean(r.get(NAME)),
+                   clean(r.get("CITY")), clean(r.get("STATE")), clean(r.get("ZIPCODE")), d, a, clean(r.get(DESC)), is_current)
+            batch.append(row + (("date_in_amount" if date_in_amount(a, d) else None),) if flagged else row)
             n += 1
             if len(batch) >= BATCH:
                 self.db.executemany(sql, batch)
@@ -354,7 +373,7 @@ class Builder:
         upd = []
         for did, key in todo:
             name = key.split("|", 1)[0]
-            kind = "organization" if ORG_WORDS.search(name) else "individual"
+            kind = "aggregate" if AGG_WORDS.search(name) else "organization" if ORG_WORDS.search(name) else "individual"
             upd.append((kind, did))
         db.executemany("UPDATE donor SET kind = ?, kind_source = 'heuristic' WHERE donor_id = ?", upd)
         db.commit()
@@ -367,7 +386,7 @@ class Builder:
             INSERT INTO filer_donor_year (filer_id, eyear, donor_id, total, inkind, n)
             SELECT filer_id, eyear, donor_id, SUM(amount),
                    SUM(CASE WHEN section IN ('IIF','IIG') THEN amount ELSE 0 END), COUNT(*)
-            FROM contribution WHERE is_current = 1 GROUP BY filer_id, eyear, donor_id""")
+            FROM contribution WHERE is_current = 1 AND flag IS NULL GROUP BY filer_id, eyear, donor_id""")
         log("aggregates: filer_year")
         db.execute("""
             INSERT INTO filer_year (filer_id, eyear, total, cash_committee, cash_other, inkind, n_contrib, n_donors, n_small)
@@ -376,7 +395,7 @@ class Builder:
                    SUM(CASE WHEN c.section IN ('IIF','IIG') OR c.section IN ('IA','IC') THEN 0 ELSE c.amount END),
                    SUM(CASE WHEN c.section IN ('IIF','IIG') THEN c.amount ELSE 0 END),
                    COUNT(*), COUNT(DISTINCT c.donor_id), 0
-            FROM contribution c WHERE c.is_current = 1 GROUP BY c.filer_id, c.eyear""")
+            FROM contribution c WHERE c.is_current = 1 AND c.flag IS NULL GROUP BY c.filer_id, c.eyear""")
         db.execute("""
             UPDATE filer_year SET n_small = (
                 SELECT COUNT(*) FROM filer_donor_year d
@@ -384,16 +403,16 @@ class Builder:
         db.execute("""
             UPDATE filer_year SET expenses = COALESCE((
                 SELECT SUM(amount) FROM expense e
-                WHERE e.filer_id = filer_year.filer_id AND e.eyear = filer_year.eyear AND e.is_current = 1), 0)""")
+                WHERE e.filer_id = filer_year.filer_id AND e.eyear = filer_year.eyear AND e.is_current = 1 AND e.flag IS NULL), 0)""")
         # Filers with expenses but no contributions still need a row so the year shows up.
         db.execute("""
             INSERT OR IGNORE INTO filer_year (filer_id, eyear, total, cash_committee, cash_other, inkind, n_contrib, n_donors, n_small, expenses)
-            SELECT filer_id, eyear, 0, 0, 0, 0, 0, 0, 0, SUM(amount) FROM expense WHERE is_current = 1 GROUP BY filer_id, eyear""")
+            SELECT filer_id, eyear, 0, 0, 0, 0, 0, 0, 0, SUM(amount) FROM expense WHERE is_current = 1 AND flag IS NULL GROUP BY filer_id, eyear""")
         log("aggregates: filer_month")
         db.execute("""
             INSERT INTO filer_month (filer_id, eyear, month, total)
             SELECT filer_id, eyear, substr(date, 1, 7), SUM(amount)
-            FROM contribution WHERE is_current = 1 AND date IS NOT NULL GROUP BY filer_id, eyear, substr(date, 1, 7)""")
+            FROM contribution WHERE is_current = 1 AND flag IS NULL AND date IS NOT NULL GROUP BY filer_id, eyear, substr(date, 1, 7)""")
         log("aggregates: donor_year")
         db.execute("""
             INSERT INTO donor_year (donor_id, eyear, total, n, n_recipients)
@@ -408,6 +427,8 @@ class Builder:
               n_contrib = COALESCE((SELECT SUM(n) FROM donor_year y WHERE y.donor_id = donor.donor_id), 0),
               first_year = (SELECT MIN(eyear) FROM donor_year y WHERE y.donor_id = donor.donor_id),
               last_year = (SELECT MAX(eyear) FROM donor_year y WHERE y.donor_id = donor.donor_id)""")
+        from ranks import build_donor_ranks
+        build_donor_ranks(db, log)
         log("full-text indexes")
         db.execute("INSERT INTO filer_fts (name, filer_id) SELECT name, filer_id FROM filer_name")
         db.execute("INSERT INTO donor_fts (name, city, employer, donor_id) SELECT name, city, employer, donor_id FROM donor")

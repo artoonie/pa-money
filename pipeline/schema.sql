@@ -75,7 +75,8 @@ CREATE TABLE contribution (
   date        TEXT,                 -- YYYY-MM-DD or NULL
   amount      REAL NOT NULL,
   description TEXT,
-  is_current  INTEGER NOT NULL DEFAULT 1
+  is_current  INTEGER NOT NULL DEFAULT 1,
+  flag        TEXT                      -- 'date_in_amount': the amount field holds a YYYYMMDD date; excluded from totals
 );
 CREATE INDEX contribution_filer ON contribution (filer_id, eyear, is_current, amount);
 CREATE INDEX contribution_donor ON contribution (donor_id, eyear, is_current);
@@ -93,7 +94,8 @@ CREATE TABLE expense (
   date        TEXT,
   amount      REAL NOT NULL,
   description TEXT,
-  is_current  INTEGER NOT NULL DEFAULT 1
+  is_current  INTEGER NOT NULL DEFAULT 1,
+  flag        TEXT
 );
 CREATE INDEX expense_filer ON expense (filer_id, eyear, is_current, amount);
 
@@ -184,3 +186,23 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 -- Full-text search. Prefix queries (tok*) on unicode61 tokens.
 CREATE VIRTUAL TABLE filer_fts USING fts5 (name, filer_id UNINDEXED, tokenize = 'unicode61');
 CREATE VIRTUAL TABLE donor_fts USING fts5 (name, city, employer, donor_id UNINDEXED, tokenize = 'unicode61');
+
+-- Precomputed donor rankings (merged entities collapsed), so ranking pages never scan donor_year live.
+-- eyear 0 = all years; kind is 'all', 'individual', 'organization' or 'committee'. Top 1000 per pair.
+CREATE TABLE donor_rank (
+  eyear        INTEGER NOT NULL,
+  kind         TEXT NOT NULL,
+  rank         INTEGER NOT NULL,
+  donor_id     INTEGER NOT NULL,
+  entity_id    TEXT,
+  name         TEXT NOT NULL,
+  city         TEXT,
+  state        TEXT,
+  employer     TEXT,
+  donor_kind   TEXT,
+  n_keys       INTEGER NOT NULL,
+  total        REAL NOT NULL,
+  n            INTEGER NOT NULL,
+  n_recipients INTEGER NOT NULL,
+  PRIMARY KEY (eyear, kind, rank)
+);

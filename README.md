@@ -120,3 +120,9 @@ wrangler's local state are ignored by git.
 
 Code is MIT. The underlying filings are public records of the Commonwealth of
 Pennsylvania.
+
+- **Amounts that are really dates.** A few dozen rows across the export have a
+  YYYYMMDD value in the amount column and nothing in the date column, a column
+  shift in the original filing. They would add hundreds of millions of phantom
+  dollars, so the build flags them (`flag = 'date_in_amount'`), keeps them
+  visible with a badge, and leaves them out of every total and ranking.

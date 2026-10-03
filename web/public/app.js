@@ -3,6 +3,9 @@
   'use strict';
   const main = document.getElementById('main');
   let META = null;
+  let metaPromise = null;
+  // Pages call this with their own data promise so the two requests overlap.
+  const withMeta = async (dataPromise) => { const [, d] = await Promise.all([metaPromise, dataPromise]); return d; };
   // ?theme=light|dark pins the color scheme; otherwise the OS preference applies.
   const themeParam = new URLSearchParams(location.search).get('theme');
   if (themeParam === 'light' || themeParam === 'dark') document.documentElement.dataset.theme = themeParam;
@@ -60,6 +63,7 @@
       junk: '<span class="badge b-gray">Not a donor</span>' }[k] || '';
   }
   const isInkind = (s) => s === 'IIF' || s === 'IIG';
+  const flagBadge = (c) => (c.flag === 'date_in_amount' ? ' <span class="badge b-gray" title="The amount field in this filing holds a date, so the real amount is unknown. Excluded from totals.">amount is a date</span>' : '');
   function sectionBadge(s) {
     return isInkind(s) ? '<span class="badge b-pink">In-kind</span>' : (s === 'IA' || s === 'IC') ? '<span class="badge b-purple">Committee cash</span>' : '<span class="badge b-blue">Cash</span>';
   }
@@ -168,13 +172,13 @@
     main.innerHTML = '<div class="loading">Loading…</div>';
     window.scrollTo(0, 0);
     try {
-      if (!META) { META = await api('/meta'); const fr = document.getElementById('footer-repo'); if (META.repo_url) fr.href = META.repo_url; else fr.remove(); }
+      if (!metaPromise) metaPromise = api('/meta').then((m) => { META = m; const fr = document.getElementById('footer-repo'); if (fr) { if (m.repo_url) fr.href = m.repo_url; else fr.remove(); } return m; });
       let m;
       if (p === '/') await home();
       else if (p === '/search') await searchPage(q.get('q') || '');
       else if (p === '/top') await topPage(q);
       else if (p === '/donors') await donorsPage(q);
-      else if (p === '/about') aboutPage();
+      else if (p === '/about') { await metaPromise; aboutPage(); }
       else if ((m = p.match(/^\/filer\/([^/]+)$/))) await filerPage(decodeURIComponent(m[1]), q);
       else if ((m = p.match(/^\/donor\/(\d+)$/))) await donorPage(`/donor/${m[1]}`, q);
       else if ((m = p.match(/^\/entity\/([^/]+)$/))) await donorPage(`/entity/${m[1]}`, q);
@@ -187,8 +191,8 @@
   // ---- pages ----------------------------------------------------------------
   async function home() {
     document.title = 'PA Money';
-    const year = META.default_year;
-    const [top, donors] = await Promise.all([api(`/top?year=${year}&limit=10`), api(`/top-donors?year=${year}&limit=5&kind=individual`)]);
+    const [top, donors] = await withMeta(Promise.all([api('/top?limit=10'), api('/top-donors?limit=5&kind=individual')]));
+    const year = top.year;
     const c = META.counts || {};
     main.innerHTML = `
       <section class="hero">
@@ -241,7 +245,7 @@
 
   async function searchPage(q) {
     document.title = `“${q}” · PA Money`;
-    const data = await api(`/search?q=${encodeURIComponent(q)}&limit=50`);
+    const data = await withMeta(api(`/search?q=${encodeURIComponent(q)}&limit=50`));
     main.innerHTML = `
       <h1>Results for “${esc(q)}”</h1>
       <section class="grid-2">
@@ -256,7 +260,7 @@
   async function topPage(q) {
     const type = q.get('type') || 'all';
     const offset = parseInt(q.get('offset') || '0', 10) || 0;
-    const data = await api(`/top?year=${encodeURIComponent(q.get('year') || '')}&type=${type}&limit=50&offset=${offset}`);
+    const data = await withMeta(api(`/top?year=${encodeURIComponent(q.get('year') || '')}&type=${type}&limit=50&offset=${offset}`));
     const year = data.year;
     document.title = `Top recipients ${year} · PA Money`;
     const base = `/top`;
@@ -274,7 +278,7 @@
   async function donorsPage(q) {
     const kind = q.get('kind') || 'individual';
     const offset = parseInt(q.get('offset') || '0', 10) || 0;
-    const data = await api(`/top-donors?year=${encodeURIComponent(q.get('year') || '')}&kind=${kind}&limit=50&offset=${offset}`);
+    const data = await withMeta(api(`/top-donors?year=${encodeURIComponent(q.get('year') || '')}&kind=${kind}&limit=50&offset=${offset}`));
     const year = data.year;
     document.title = `Top donors ${year} · PA Money`;
     const base = '/donors';
@@ -286,7 +290,7 @@
       <div class="card"><div class="table-wrap"><table class="rows"><thead><tr><th>#</th><th>Donor</th><th>Kind</th><th class="num">Recipients</th><th class="num">Gifts</th><th class="num">Total</th></tr></thead><tbody>
         ${data.rows.map((d, i) => `<tr><td class="muted m-hide">${offset + i + 1}</td><td class="t"><a class="name" href="${donorHref(d)}" data-link><span class="m-only">${offset + i + 1}. </span>${esc(niceName(d.name))}</a><div class="sub">${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}${d.entity_id ? ` · <span class="badge b-gray">${d.n_keys > 1 ? d.n_keys + ' spellings merged' : 'merged'}</span>` : ''}<span class="m-only"> · ${kindBadge(d.kind)} · ${int(d.n)} gifts to ${int(d.n_recipients)}</span></div></td><td class="m-hide">${kindBadge(d.kind)}</td><td class="num m-hide">${int(d.n_recipients)}</td><td class="num m-hide">${int(d.n)}</td><td class="num strong a">${money(d.total)}</td></tr>`).join('')}
       </tbody></table></div>
-      <div class="card-foot"><span>Showing ${offset + 1}–${offset + data.rows.length}. "Individual" is a heuristic: anything not filed as a political committee and without organization words in its name.</span><span class="pager">${offset > 0 ? `<a class="btn" href="${base}?year=${year}${kq}&offset=${Math.max(0, offset - 50)}" data-link>← Previous</a>` : ''}${data.rows.length === 50 ? `<a class="btn" href="${base}?year=${year}${kq}&offset=${offset + 50}" data-link>Next →</a>` : ''}</span></div></div>`;
+      <div class="card-foot"><span>Showing ${offset + 1}–${offset + data.rows.length} of the top ${int(data.max || 1000)}. "Individual" is a heuristic: anything not filed as a political committee and without organization words in its name.</span><span class="pager">${offset > 0 ? `<a class="btn" href="${base}?year=${year}${kq}&offset=${Math.max(0, offset - 50)}" data-link>← Previous</a>` : ''}${data.rows.length === 50 && offset + 50 < (data.max || 1000) ? `<a class="btn" href="${base}?year=${year}${kq}&offset=${offset + 50}" data-link>Next →</a>` : ''}</span></div></div>`;
   }
 
   function barChart(timeline, year) {
@@ -315,7 +319,7 @@
 
   async function filerPage(id, q) {
     const combine = q.get('combine') !== '0';
-    const data = await api(`/filer/${encodeURIComponent(id)}?year=${encodeURIComponent(q.get('year') || '')}&combine=${combine ? 1 : 0}`);
+    const data = await withMeta(api(`/filer/${encodeURIComponent(id)}?year=${encodeURIComponent(q.get('year') || '')}&combine=${combine ? 1 : 0}`));
     if (data.error) { main.innerHTML = `<h1>Filer not found</h1><p class="muted">No filer with ID ${esc(id)}.</p>`; return; }
     const f = data.filer, s = data.summary, year = data.year;
     const yearLabel = year === 'all' ? 'all years' : year;
@@ -414,7 +418,7 @@
       const d = await api(`/filer/${encodeURIComponent(f.filer_id)}/contributions?${qs}`);
       contribTable.style.minHeight = '';
       contribTable.innerHTML = `<div class="table-wrap"><table class="rows"><thead><tr><th>Date</th><th>Contributor</th><th>Kind</th><th class="num">Amount</th><th>Report</th></tr></thead><tbody>
-        ${d.rows.map((c) => `<tr><td style="white-space:nowrap" class="m-hide">${fmtDate(c.date) || '<span class="muted">no date</span>'}</td><td class="t"><a class="name" href="${donorHref(c)}" data-link>${esc(niceName(c.contributor) || '(blank)')}</a><div class="sub">${esc([place(c.city, c.state), c.occupation ? niceName(c.occupation) : '', c.employer ? niceName(c.employer) : ''].filter(Boolean).join(' · '))}${c.description ? ` · <em>${esc(c.description)}</em>` : ''}<span class="m-only"> · ${fmtDate(c.date) || 'no date'} · ${sectionBadge(c.section)} · ${esc(cycleLabel(c.cycle))}</span></div></td><td class="m-hide">${sectionBadge(c.section)} <span class="muted small">${esc(c.section || '')}</span></td><td class="num strong a">${money(c.amount)}</td><td class="small muted m-hide">${esc(cycleLabel(c.cycle))}${data.ids.length > 1 ? '<br>' + esc(c.filer_id) : ''}</td></tr>`).join('') || '<tr><td class="muted" colspan="5">Nothing matches.</td></tr>'}
+        ${d.rows.map((c) => `<tr><td style="white-space:nowrap" class="m-hide">${fmtDate(c.date) || '<span class="muted">no date</span>'}</td><td class="t"><a class="name" href="${donorHref(c)}" data-link>${esc(niceName(c.contributor) || '(blank)')}</a><div class="sub">${esc([place(c.city, c.state), c.occupation ? niceName(c.occupation) : '', c.employer ? niceName(c.employer) : ''].filter(Boolean).join(' · '))}${c.description ? ` · <em>${esc(c.description)}</em>` : ''}<span class="m-only"> · ${fmtDate(c.date) || 'no date'} · ${sectionBadge(c.section)} · ${esc(cycleLabel(c.cycle))}</span></div></td><td class="m-hide">${sectionBadge(c.section)} <span class="muted small">${esc(c.section || '')}</span></td><td class="num strong a">${money(c.amount)}${flagBadge(c)}</td><td class="small muted m-hide">${esc(cycleLabel(c.cycle))}${data.ids.length > 1 ? '<br>' + esc(c.filer_id) : ''}</td></tr>`).join('') || '<tr><td class="muted" colspan="5">Nothing matches.</td></tr>'}
       </tbody></table></div>
       <div class="card-foot"><span>${int(d.count)} contributions totaling ${money(d.total)}. Showing ${d.count ? offset + 1 : 0}–${offset + d.rows.length}.</span><span class="pager"><button class="btn" id="cp" ${offset ? '' : 'disabled'}>← Previous</button><button class="btn" id="cn" ${offset + 50 < d.count ? '' : 'disabled'}>Next →</button></span></div>`;
       contribTable.querySelector('#cp').onclick = () => { offset = Math.max(0, offset - 50); loadContribs(); };
@@ -433,13 +437,13 @@
       expTable.innerHTML = '<div class="loading">Loading…</div>';
       const d = await api(`/filer/${encodeURIComponent(f.filer_id)}/expenses?year=${year}&combine=${combine ? 1 : 0}&limit=100`);
       expTable.innerHTML = `<div class="card-head" style="border-top:1px solid var(--line-2)"><h3>Largest expenses</h3><span class="muted small">${int(d.count)} payments, ${money(d.total)}</span></div><div class="table-wrap"><table class="rows"><thead><tr><th>Date</th><th>Payee</th><th>Purpose</th><th class="num">Amount</th></tr></thead><tbody>
-        ${d.rows.map((x) => `<tr><td style="white-space:nowrap" class="m-hide">${fmtDate(x.date)}</td><td class="t"><span class="strong">${esc(niceName(x.payee))}</span><div class="sub">${esc([place(x.city, x.state), x.description].filter(Boolean).join(' · '))}<span class="m-only"> · ${fmtDate(x.date)}</span></div></td><td class="small m-hide">${esc(x.description || '')}</td><td class="num strong a">${money(x.amount)}</td></tr>`).join('')}
+        ${d.rows.map((x) => `<tr><td style="white-space:nowrap" class="m-hide">${fmtDate(x.date)}</td><td class="t"><span class="strong">${esc(niceName(x.payee))}</span><div class="sub">${esc([place(x.city, x.state), x.description].filter(Boolean).join(' · '))}<span class="m-only"> · ${fmtDate(x.date)}</span></div></td><td class="small m-hide">${esc(x.description || '')}</td><td class="num strong a">${money(x.amount)}${flagBadge(x)}</td></tr>`).join('')}
       </tbody></table></div>`;
     });
   }
 
   async function donorPage(path, q) {
-    const data = await api(`${path}?year=${encodeURIComponent(q.get('year') || 'all')}`);
+    const data = await withMeta(api(`${path}?year=${encodeURIComponent(q.get('year') || 'all')}`));
     if (data.error) { main.innerHTML = '<h1>Donor not found</h1>'; return; }
     const d = data.donor, s = data.summary, year = data.year, entity = data.entity;
     const name = entity ? entity.name : niceName(d.name);
@@ -472,7 +476,7 @@
         <div class="kpi"><div class="l">Total given, ${yearLabel}</div><div class="v">${moneyShort(s.total)}</div><div class="s">${int(s.n)} contributions</div></div>
         <div class="kpi"><div class="l">Recipients</div><div class="v">${int(s.n_recipients)}</div><div class="s">${year === 'all' ? `${data.years[0] ? data.years[0].eyear : ''}–${data.years.length ? data.years[data.years.length - 1].eyear : ''}` : year}</div></div>
         <div class="kpi"><div class="l">Largest gift</div><div class="v">${s.largest ? moneyShort(s.largest.amount) : '—'}</div><div class="s">${s.largest ? esc(niceName(s.largest.filer_name)) + (s.largest.date ? ', ' + fmtDate(s.largest.date) : '') : ''}</div></div>
-        ${s.rank ? `<div class="kpi"><div class="l">Rank among individuals</div><div class="v">#${int(s.rank)}</div><div class="s">by total given, ${year}</div></div>` : ''}
+        ${s.rank ? `<div class="kpi"><div class="l">Rank among individuals</div><div class="v">#${int(s.rank)}</div><div class="s">by total given, ${yearLabel}</div></div>` : ''}
       </section>
 
       <section class="grid-2">
@@ -483,7 +487,7 @@
             </tbody></table></div></div>
           <div class="card"><div class="card-head"><h2>Every contribution, ${yearLabel}</h2><span class="muted small">${data.contributions.length === 200 ? 'largest 200' : data.contributions.length}</span></div>
             <div class="table-wrap"><table class="rows"><thead><tr><th>Date</th><th>Recipient</th><th>Filed as</th><th class="num">Amount</th><th>Report</th></tr></thead><tbody>
-              ${data.contributions.map((c) => `<tr><td style="white-space:nowrap" class="m-hide">${fmtDate(c.date) || '<span class="muted">no date</span>'}</td><td class="t"><a class="name" href="/filer/${encodeURIComponent(c.filer_id)}?year=${c.eyear}" data-link>${esc(niceName(c.filer_name))}</a><div class="sub m-only">${fmtDate(c.date) || 'no date'} · filed as ${esc(c.contributor)}${c.employer ? ', ' + esc(c.employer) : ''} · ${esc(cycleLabel(c.cycle))} ${c.eyear}</div></td><td class="m-hide"><span>${esc(c.contributor)}</span><div class="sub">${esc([place(c.city, c.state), c.occupation, c.employer].filter(Boolean).join(' · '))}</div></td><td class="num strong a">${money(c.amount)} ${isInkind(c.section) ? '<span class="badge b-pink">in-kind</span>' : ''}</td><td class="small muted m-hide">${esc(cycleLabel(c.cycle))}<br>${c.eyear} · ${esc(label('section', c.section, c.section || 'unlabeled'))}</td></tr>`).join('')}
+              ${data.contributions.map((c) => `<tr><td style="white-space:nowrap" class="m-hide">${fmtDate(c.date) || '<span class="muted">no date</span>'}</td><td class="t"><a class="name" href="/filer/${encodeURIComponent(c.filer_id)}?year=${c.eyear}" data-link>${esc(niceName(c.filer_name))}</a><div class="sub m-only">${fmtDate(c.date) || 'no date'} · filed as ${esc(c.contributor)}${c.employer ? ', ' + esc(c.employer) : ''} · ${esc(cycleLabel(c.cycle))} ${c.eyear}</div></td><td class="m-hide"><span>${esc(c.contributor)}</span><div class="sub">${esc([place(c.city, c.state), c.occupation, c.employer].filter(Boolean).join(' · '))}</div></td><td class="num strong a">${money(c.amount)} ${isInkind(c.section) ? '<span class="badge b-pink">in-kind</span>' : ''}${flagBadge(c)}</td><td class="small muted m-hide">${esc(cycleLabel(c.cycle))}<br>${c.eyear} · ${esc(label('section', c.section, c.section || 'unlabeled'))}</td></tr>`).join('')}
             </tbody></table></div></div>
         </div>
         <aside style="display:flex;flex-direction:column;gap:16px">

@@ -1,15 +1,31 @@
 // PA Money API. One Cloudflare Worker: /api/* here, everything else from the static assets.
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' };
-const CACHE = 'public, max-age=300, s-maxage=3600';
+const CACHE = 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400';  // edge copies expire within an hour of a data reload
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    // Workers responses are not cached at the edge unless we ask. Data changes only when the
+    // database is reloaded, so cache every successful GET for a day keyed on the full URL.
+    const cacheable = request.method === 'GET' && !url.searchParams.has('nocache');
+    const cache = cacheable ? caches.default : null;
+    if (cache) {
+      const hit = await cache.match(request);
+      if (hit) {
+        const h = new Headers(hit.headers);
+        h.set('x-pa-cache', 'hit');
+        return new Response(hit.body, { status: hit.status, headers: h });
+      }
+    }
     try {
-      const res = await route(url, env);
-      return res || json({ error: 'not found' }, 404);
+      const res = (await route(url, env)) || json({ error: 'not found' }, 404);
+      if (cache && res.status === 200 && ctx) {
+        res.headers.set('x-pa-cache', 'miss');
+        ctx.waitUntil(cache.put(request, res.clone()));
+      }
+      return res;
     } catch (e) {
       return json({ error: String(e && e.message ? e.message : e) }, 500);
     }
@@ -137,21 +153,17 @@ async function top(env, q) {
 }
 
 async function topDonors(env, q) {
-  const years = await all(env, 'SELECT eyear, SUM(total) total FROM donor_year GROUP BY eyear ORDER BY eyear');
-  const w = yearWindow(q, years);
-  const kind = q.get('kind') || 'individual';
-  const kindClause = kind === 'all' ? " AND d.kind != 'aggregate'" : ' AND d.kind = ?';
-  const kindParams = kind === 'all' ? [] : [kind];
+  // Rankings are precomputed at build time (pipeline/ranks.py): top 1000 per year and kind, entities collapsed.
+  const years = await all(env, 'SELECT DISTINCT eyear FROM donor_rank WHERE eyear > 0 ORDER BY eyear');
+  const w = yearWindow(q, years.map((y) => ({ eyear: y.eyear, total: 1 })));
+  const kind = ['all', 'individual', 'organization', 'committee'].includes(q.get('kind')) ? q.get('kind') : 'individual';
   const limit = num(q.get('limit'), 25, 100);
   const offset = num(q.get('offset'), 0);
   const rows = await all(env, `
-    SELECT MIN(d.donor_id) donor_id, COALESCE(MAX(e.name), MIN(d.name)) name, MIN(d.city) city, MIN(d.state) state, MIN(d.employer) employer,
-           COALESCE(MAX(e.kind), MIN(d.kind)) kind, d.entity_id, COUNT(DISTINCT d.donor_id) n_keys,
-           SUM(y.total) total, SUM(y.n) n, SUM(y.n_recipients) n_recipients
-    FROM donor_year y JOIN donor d ON d.donor_id = y.donor_id LEFT JOIN entity e ON e.entity_id = d.entity_id
-    WHERE 1=1 ${w.clause.replace('eyear', 'y.eyear')} ${kindClause}
-    GROUP BY COALESCE(d.entity_id, 'd' || d.donor_id) ORDER BY total DESC LIMIT ? OFFSET ?`, [...w.params, ...kindParams, limit, offset]);
-  return { year: w.year, years: years.map((y) => y.eyear), kind, rows, offset, limit };
+    SELECT donor_id, name, city, state, employer, donor_kind kind, entity_id, n_keys, total, n, n_recipients, rank
+    FROM donor_rank WHERE eyear = ? AND kind = ? AND rank > ? ORDER BY rank LIMIT ?`,
+    [w.year === 'all' ? 0 : w.year, kind, offset, limit]);
+  return { year: w.year, years: years.map((y) => y.eyear), kind, rows, offset, limit, max: 1000 };
 }
 
 // ---- filer ---------------------------------------------------------------------
@@ -177,19 +189,42 @@ async function filerPage(env, id, q) {
   const w = yearWindow(q, years);
   const P = [...ids, ...w.params];
 
-  const summary = await one(env, `
+  const summaryQ = one(env, `
     SELECT COALESCE(SUM(total),0) total, COALESCE(SUM(cash_committee),0) cash_committee, COALESCE(SUM(cash_other),0) cash_other,
            COALESCE(SUM(inkind),0) inkind, COALESCE(SUM(n_contrib),0) n_contrib, COALESCE(SUM(expenses),0) expenses
     FROM filer_year WHERE filer_id IN (${ph(ids)}) ${w.clause}`, P);
-  const donorsAgg = await one(env, `
+  const donorsAggQ = one(env, `
     SELECT COUNT(*) n_donors, COALESCE(SUM(CASE WHEN t <= 250 THEN 1 ELSE 0 END),0) n_small
     FROM (SELECT donor_id, SUM(total) t FROM filer_donor_year WHERE filer_id IN (${ph(ids)}) ${w.clause} GROUP BY donor_id)`, P);
+  const monthsQ = w.year === 'all' ? Promise.resolve([]) :
+    all(env, `SELECT month, SUM(total) total FROM filer_month WHERE filer_id IN (${ph(ids)}) ${w.clause} GROUP BY month ORDER BY month`, P);
+  const topDonorsQ = all(env, `
+    SELECT MIN(d.donor_id) donor_id, COALESCE(MAX(e.name), MIN(d.name)) name, MIN(d.city) city, MIN(d.state) state, MIN(d.employer) employer,
+           COALESCE(MAX(e.kind), MIN(d.kind)) kind, MIN(d.kind_source) kind_source, d.entity_id, COUNT(DISTINCT d.donor_id) n_keys,
+           SUM(fd.total) total, SUM(fd.inkind) inkind, SUM(fd.n) n
+    FROM filer_donor_year fd JOIN donor d ON d.donor_id = fd.donor_id LEFT JOIN entity e ON e.entity_id = d.entity_id
+    WHERE fd.filer_id IN (${ph(ids)}) ${w.clause.replace('eyear', 'fd.eyear')}
+    GROUP BY COALESCE(d.entity_id, 'd' || d.donor_id) ORDER BY total DESC LIMIT 15`, P);
+  const largestQ = all(env, `
+    SELECT c.id, c.cf_id, c.filer_id, c.eyear, c.cycle, c.section, c.donor_id, c.contributor, c.city, c.state, c.employer, c.occupation,
+           c.date, c.amount, c.description, r.submitted, r.amend
+    FROM contribution c LEFT JOIN report r ON r.cf_id = c.cf_id
+    WHERE c.filer_id IN (${ph(ids)}) AND c.is_current = 1 AND c.flag IS NULL ${w.clause.replace('eyear', 'c.eyear')}
+    ORDER BY c.amount DESC LIMIT 10`, P);
+  const payeesQ = all(env, `
+    SELECT payee, MIN(city) city, MIN(state) state, SUM(amount) total, COUNT(*) n
+    FROM expense WHERE filer_id IN (${ph(ids)}) AND is_current = 1 AND flag IS NULL ${w.clause}
+    GROUP BY UPPER(payee) ORDER BY total DESC LIMIT 10`, P);
+  const reportsQ = all(env, `
+    SELECT cf_id, filer_id, eyear, cycle, submitted, amend, terminate, beginning, monetary, inkind, is_current
+    FROM report WHERE filer_id IN (${ph(ids)}) ${w.clause} ORDER BY eyear, cycle, submitted`, P);
+  const [summary, donorsAgg, months, topDonorsRows, largest, payees, reports, lk] =
+    await Promise.all([summaryQ, donorsAggQ, monthsQ, topDonorsQ, largestQ, payeesQ, reportsQ, lookups(env)]);
 
   let timeline;
   if (w.year === 'all') {
     timeline = years.map((y) => ({ label: String(y.eyear), total: y.total }));
   } else {
-    const months = await all(env, `SELECT month, SUM(total) total FROM filer_month WHERE filer_id IN (${ph(ids)}) ${w.clause} GROUP BY month ORDER BY month`, P);
     const byMonth = Object.fromEntries(months.map((m) => [m.month, m.total]));
     timeline = Array.from({ length: 12 }, (_, i) => {
       const key = `${w.year}-${String(i + 1).padStart(2, '0')}`;
@@ -200,31 +235,6 @@ async function filerPage(env, id, q) {
     if (outside > 0) timeline.push({ label: 'other dates', total: outside });
   }
 
-  // Donors merged into an entity by a reviewed rule collapse into one row; everyone else stays one row per filed spelling.
-  const topDonorsRows = await all(env, `
-    SELECT MIN(d.donor_id) donor_id, COALESCE(MAX(e.name), MIN(d.name)) name, MIN(d.city) city, MIN(d.state) state, MIN(d.employer) employer,
-           COALESCE(MAX(e.kind), MIN(d.kind)) kind, MIN(d.kind_source) kind_source, d.entity_id, COUNT(DISTINCT d.donor_id) n_keys,
-           SUM(fd.total) total, SUM(fd.inkind) inkind, SUM(fd.n) n
-    FROM filer_donor_year fd JOIN donor d ON d.donor_id = fd.donor_id LEFT JOIN entity e ON e.entity_id = d.entity_id
-    WHERE fd.filer_id IN (${ph(ids)}) ${w.clause.replace('eyear', 'fd.eyear')}
-    GROUP BY COALESCE(d.entity_id, 'd' || d.donor_id) ORDER BY total DESC LIMIT 15`, P);
-
-  const largest = await all(env, `
-    SELECT c.id, c.cf_id, c.filer_id, c.eyear, c.cycle, c.section, c.donor_id, c.contributor, c.city, c.state, c.employer, c.occupation,
-           c.date, c.amount, c.description, r.submitted, r.amend
-    FROM contribution c LEFT JOIN report r ON r.cf_id = c.cf_id
-    WHERE c.filer_id IN (${ph(ids)}) AND c.is_current = 1 ${w.clause.replace('eyear', 'c.eyear')}
-    ORDER BY c.amount DESC LIMIT 10`, P);
-
-  const payees = await all(env, `
-    SELECT payee, MIN(city) city, MIN(state) state, SUM(amount) total, COUNT(*) n
-    FROM expense WHERE filer_id IN (${ph(ids)}) AND is_current = 1 ${w.clause}
-    GROUP BY UPPER(payee) ORDER BY total DESC LIMIT 10`, P);
-
-  const reports = await all(env, `
-    SELECT cf_id, filer_id, eyear, cycle, submitted, amend, terminate, beginning, monetary, inkind, is_current
-    FROM report WHERE filer_id IN (${ph(ids)}) ${w.clause} ORDER BY eyear, cycle, submitted`, P);
-
   // Which donors above are part of a merged entity, so the UI can say so.
   const entityIds = [...new Set(topDonorsRows.map((d) => d.entity_id).filter(Boolean))];
   const entities = entityIds.length ? await all(env, `SELECT entity_id, name, kind FROM entity WHERE entity_id IN (${ph(entityIds)})`, entityIds) : [];
@@ -233,7 +243,7 @@ async function filerPage(env, id, q) {
     filer, group, combine, ids, years, year: w.year,
     summary: { ...summary, ...donorsAgg },
     timeline, top_donors: topDonorsRows, largest, payees, reports, entities,
-    lookups: await lookups(env),
+    lookups: lk,
   };
 }
 
@@ -269,11 +279,11 @@ async function filerContributions(env, id, q) {
   const P = [...ids, ...w.params, ...f.params];
   const rows = await all(env, `
     SELECT c.id, c.cf_id, c.filer_id, c.eyear, c.cycle, c.section, c.donor_id, c.contributor, c.city, c.state, c.employer, c.occupation,
-           c.date, c.amount, c.description, d.entity_id
+           c.date, c.amount, c.description, c.flag, d.entity_id
     FROM contribution c JOIN donor d ON d.donor_id = c.donor_id
     WHERE c.filer_id IN (${ph(ids)}) AND c.is_current = 1 ${w.clause} ${f.clause}
     ORDER BY ${sort} LIMIT ? OFFSET ?`, [...P, limit, offset]);
-  const count = await one(env, `SELECT COUNT(*) n, COALESCE(SUM(c.amount),0) total FROM contribution c WHERE c.filer_id IN (${ph(ids)}) AND c.is_current = 1 ${w.clause} ${f.clause}`, P);
+  const count = await one(env, `SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN c.flag IS NULL THEN c.amount ELSE 0 END),0) total FROM contribution c WHERE c.filer_id IN (${ph(ids)}) AND c.is_current = 1 ${w.clause} ${f.clause}`, P);
   return { year: w.year, rows, offset, limit, count: count.n, total: count.total };
 }
 
@@ -290,10 +300,10 @@ async function filerExpenses(env, id, q) {
   const tparams = text ? [`%${text}%`, `%${text}%`, `%${text}%`] : [];
   const P = [...ids, ...w.params, ...tparams];
   const rows = await all(env, `
-    SELECT id, cf_id, filer_id, eyear, cycle, payee, city, state, date, amount, description
+    SELECT id, cf_id, filer_id, eyear, cycle, payee, city, state, date, amount, description, flag
     FROM expense WHERE filer_id IN (${ph(ids)}) AND is_current = 1 ${w.clause} ${tclause}
     ORDER BY amount DESC, date DESC LIMIT ? OFFSET ?`, [...P, limit, offset]);
-  const count = await one(env, `SELECT COUNT(*) n, COALESCE(SUM(amount),0) total FROM expense WHERE filer_id IN (${ph(ids)}) AND is_current = 1 ${w.clause} ${tclause}`, P);
+  const count = await one(env, `SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN flag IS NULL THEN amount ELSE 0 END),0) total FROM expense WHERE filer_id IN (${ph(ids)}) AND is_current = 1 ${w.clause} ${tclause}`, P);
   return { year: w.year, rows, offset, limit, count: count.n, total: count.total };
 }
 
@@ -305,10 +315,10 @@ async function csvContributions(env, id, q) {
   const w = yearWindow(q, years, 'c.eyear');
   const f = contributionFilters(q);
   const rows = await all(env, `
-    SELECT c.filer_id, c.eyear, c.cycle, c.cf_id, c.section, c.contributor, c.city, c.state, c.zip, c.occupation, c.employer, c.date, c.amount, c.description
+    SELECT c.filer_id, c.eyear, c.cycle, c.cf_id, c.section, c.contributor, c.city, c.state, c.zip, c.occupation, c.employer, c.date, c.amount, c.description, c.flag
     FROM contribution c WHERE c.filer_id IN (${ph(ids)}) AND c.is_current = 1 ${w.clause} ${f.clause}
     ORDER BY c.amount DESC LIMIT 20000`, [...ids, ...w.params, ...f.params]);
-  const cols = ['filer_id', 'eyear', 'cycle', 'cf_id', 'section', 'contributor', 'city', 'state', 'zip', 'occupation', 'employer', 'date', 'amount', 'description'];
+  const cols = ['filer_id', 'eyear', 'cycle', 'cf_id', 'section', 'contributor', 'city', 'state', 'zip', 'occupation', 'employer', 'date', 'amount', 'description', 'flag'];
   const esc = (v) => (v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
   const body = [cols.join(',')].concat(rows.map((r) => cols.map((c) => esc(r[c])).join(','))).join('\n') + '\n';
   const name = `${filer.name.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${w.year}-contributions.csv`;
@@ -338,32 +348,31 @@ async function donorView(env, members, entity, q, focus = null) {
   const years = await all(env, `SELECT eyear, SUM(total) total, SUM(n) n FROM donor_year WHERE donor_id IN (${ph(ids)}) GROUP BY eyear ORDER BY eyear`, ids);
   const w = yearWindow(q, years);
   const P = [...ids, ...w.params];
-  const summary = await one(env, `
+  const summaryQ = one(env, `
     SELECT COALESCE(SUM(total),0) total, COALESCE(SUM(n),0) n FROM donor_year WHERE donor_id IN (${ph(ids)}) ${w.clause}`, P);
-  const recipients = await all(env, `
+  const recipientsQ = all(env, `
     SELECT f.filer_id, f.name, f.filer_type, f.office, f.district, f.party, f.city, f.state, f.group_id,
            SUM(fd.total) total, SUM(fd.inkind) inkind, SUM(fd.n) n, MIN(fd.eyear) first_year, MAX(fd.eyear) last_year
     FROM filer_donor_year fd JOIN filer f ON f.filer_id = fd.filer_id
     WHERE fd.donor_id IN (${ph(ids)}) ${w.clause.replace('eyear', 'fd.eyear')}
     GROUP BY f.filer_id ORDER BY total DESC LIMIT 100`, P);
-  const contributions = await all(env, `
+  const contributionsQ = all(env, `
     SELECT c.id, c.cf_id, c.filer_id, f.name filer_name, c.eyear, c.cycle, c.section, c.donor_id, c.contributor, c.city, c.state,
-           c.employer, c.occupation, c.date, c.amount, c.description
+           c.employer, c.occupation, c.date, c.amount, c.description, c.flag
     FROM contribution c JOIN filer f ON f.filer_id = c.filer_id
     WHERE c.donor_id IN (${ph(ids)}) AND c.is_current = 1 ${w.clause.replace('eyear', 'c.eyear')}
     ORDER BY c.amount DESC, c.date DESC LIMIT 200`, P);
-  const largest = contributions.length ? contributions[0] : null;
+  const [summary, recipients, contributions, lk] = await Promise.all([summaryQ, recipientsQ, contributionsQ, lookups(env)]);
+  const largest = contributions.find((c) => !c.flag) || null;
   let rank = null;
-  if (w.year !== 'all' && members[0].kind === 'individual') {
-    const r = await one(env, `
-      SELECT COUNT(*) + 1 rank FROM (
-        SELECT y.donor_id, SUM(y.total) t FROM donor_year y JOIN donor d ON d.donor_id = y.donor_id
-        WHERE y.eyear = ? AND d.kind = 'individual' GROUP BY y.donor_id HAVING t > ?)`, [w.year, summary.total]);
-    rank = r && r.rank;
+  if ((entity ? entity.kind : members[0].kind) === 'individual') {
+    const r = await one(env, `SELECT MIN(rank) rank FROM donor_rank WHERE eyear = ? AND kind = 'individual' AND donor_id IN (${ph(ids)})`,
+      [w.year === 'all' ? 0 : w.year, ...ids]);
+    rank = r && r.rank;   // null when outside the top 1000
   }
   return {
     donor: focus || members[0], entity, members, ids, years, year: w.year,
     summary: { ...summary, n_recipients: recipients.length, largest, rank },
-    recipients, contributions, lookups: await lookups(env),
+    recipients, contributions, lookups: lk,
   };
 }
