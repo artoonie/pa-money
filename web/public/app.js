@@ -106,7 +106,9 @@
   // ---- search box wiring --------------------------------------------------
   function wireSearch(form, input, dropdown) {
     let timer = null, last = '', active = -1;
-    const close = () => { dropdown.hidden = true; dropdown.innerHTML = ''; active = -1; };
+    // Cancel the pending fetch too, or a late result reopens the dropdown after navigating.
+    const close = () => { clearTimeout(timer); last = ''; dropdown.hidden = true; dropdown.innerHTML = ''; active = -1; };
+    searchClosers.push(close);
     input.addEventListener('input', () => {
       const q = input.value.trim();
       clearTimeout(timer);
@@ -135,19 +137,28 @@
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const q = input.value.trim();
+      input.blur();
       if (q) navigate(`/search?q=${encodeURIComponent(q)}`);
     });
     document.addEventListener('click', (e) => { if (!form.contains(e.target)) close(); });
   }
 
   // ---- routing ------------------------------------------------------------
-  function navigate(href) { history.pushState(null, '', href); render(); }
+  const searchClosers = [];
+  function closeSearch() {
+    for (const c of searchClosers) c();
+    for (const d of document.querySelectorAll('.dropdown')) { d.hidden = true; d.innerHTML = ''; }
+    const nav = document.getElementById('nav-q');
+    if (nav) nav.value = '';
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  }
+  function navigate(href) { closeSearch(); history.pushState(null, '', href); render(); }
   document.addEventListener('click', (e) => {
     const a = e.target.closest('a[data-link]');
     if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault(); navigate(a.getAttribute('href'));
   });
-  window.addEventListener('popstate', render);
+  window.addEventListener('popstate', () => { closeSearch(); render(); });
 
   async function render() {
     const url = new URL(location.href);
@@ -186,7 +197,7 @@
         <form class="hero-search" id="hero-search" role="search" action="/search" autocomplete="off">
           <label for="hero-q" class="sr-only">Search</label>
           <div class="box"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-            <input id="hero-q" name="q" type="search" placeholder="Search a candidate, committee, donor or employer" autofocus></div>
+            <input id="hero-q" name="q" type="search" placeholder="Search a candidate, committee, donor or employer"></div>
           <div class="dropdown" id="hero-dropdown" hidden></div>
         </form>
         <div class="chips">
@@ -199,16 +210,16 @@
       <section class="grid-2" style="margin-top:40px">
         <div class="card">
           <div class="card-head"><h2>Top recipients, ${year}</h2><a href="/top?year=${year}" data-link>Full ranking →</a></div>
-          <div class="table-wrap"><table><thead><tr><th style="width:36px">#</th><th>Recipient</th><th>Type</th><th class="num">Raised</th></tr></thead><tbody>
-            ${top.rows.map((f, i) => `<tr><td class="muted">${i + 1}</td><td><a class="name" href="/filer/${encodeURIComponent(f.filer_id)}" data-link>${esc(niceName(f.name))}</a><div class="sub">${esc([officeText(f), place(f.city, f.state)].filter(Boolean).join(' · '))}</div></td><td>${filerTypeBadge(f)} ${partyBadge(f.party)}</td><td class="num strong">${moneyShort(f.total)}</td></tr>`).join('')}
+          <div class="table-wrap"><table class="rows"><thead><tr><th style="width:36px">#</th><th>Recipient</th><th>Type</th><th class="num">Raised</th></tr></thead><tbody>
+            ${top.rows.map((f, i) => `<tr><td class="muted m-hide">${i + 1}</td><td class="t"><a class="name" href="/filer/${encodeURIComponent(f.filer_id)}" data-link>${i + 1}. ${esc(niceName(f.name))}</a><div class="sub">${esc([officeText(f), place(f.city, f.state)].filter(Boolean).join(' · '))}<span class="m-only"> · ${filerTypeBadge(f)} ${partyBadge(f.party)}</span></div></td><td class="m-hide">${filerTypeBadge(f)} ${partyBadge(f.party)}</td><td class="num strong a">${moneyShort(f.total)}</td></tr>`).join('')}
           </tbody></table></div>
           <div class="card-foot"><span>Totals count only the latest version of each report. Amended filings replace the originals.</span></div>
         </div>
         <div style="display:flex;flex-direction:column;gap:16px">
           <div class="card">
             <div class="card-head"><h2>Biggest individual donors, ${year}</h2></div>
-            <div class="table-wrap"><table><tbody>
-              ${donors.rows.map((d) => `<tr><td><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${esc(place(d.city, d.state))}${d.entity_id ? ' · merged' : ''}</div></td><td class="num strong">${moneyShort(d.total)}</td></tr>`).join('')}
+            <div class="table-wrap"><table class="rows"><tbody>
+              ${donors.rows.map((d) => `<tr><td class="t"><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${esc(place(d.city, d.state))}${d.entity_id ? ' · merged' : ''}</div></td><td class="num strong a">${moneyShort(d.total)}</td></tr>`).join('')}
             </tbody></table></div>
             <div class="card-foot"><a href="/donors?year=${year}" data-link>All donors →</a></div>
           </div>
@@ -225,6 +236,7 @@
         </div>
       </section>`;
     wireSearch(document.getElementById('hero-search'), document.getElementById('hero-q'), document.getElementById('hero-dropdown'));
+    if (matchMedia('(pointer: fine)').matches) document.getElementById('hero-q').focus();
   }
 
   async function searchPage(q) {
@@ -234,9 +246,9 @@
       <h1>Results for “${esc(q)}”</h1>
       <section class="grid-2">
         <div class="card"><div class="card-head"><h2>Recipients</h2><span class="muted small">${data.filers.length === 50 ? 'first 50' : data.filers.length} · ranked by money raised</span></div>
-          <div class="table-wrap"><table><tbody>${data.filers.map((f) => `<tr><td><a class="name" href="/filer/${encodeURIComponent(f.filer_id)}" data-link>${esc(niceName(f.name))}</a><div class="sub">${filerSub(f)}${f.first_year ? ` · ${f.first_year === f.last_year ? f.first_year : f.first_year + '–' + f.last_year}` : ''}</div></td><td class="num strong">${moneyShort(f.total_all)}</td></tr>`).join('') || '<tr><td class="muted">None</td></tr>'}</tbody></table></div></div>
+          <div class="table-wrap"><table class="rows"><tbody>${data.filers.map((f) => `<tr><td class="t"><a class="name" href="/filer/${encodeURIComponent(f.filer_id)}" data-link>${esc(niceName(f.name))}</a><div class="sub">${filerSub(f)}${f.first_year ? ` · ${f.first_year === f.last_year ? f.first_year : f.first_year + '–' + f.last_year}` : ''}</div></td><td class="num strong a">${moneyShort(f.total_all)}</td></tr>`).join('') || '<tr><td class="muted">None</td></tr>'}</tbody></table></div></div>
         <div class="card"><div class="card-head"><h2>Donors</h2><span class="muted small">${data.donors.length === 50 ? 'first 50' : data.donors.length} · ranked by money given</span></div>
-          <div class="table-wrap"><table><tbody>${data.donors.map((d) => `<tr><td><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${kindBadge(d.kind)} ${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}</div></td><td class="num strong">${moneyShort(d.total_all)}</td></tr>`).join('') || '<tr><td class="muted">None</td></tr>'}</tbody></table></div></div>
+          <div class="table-wrap"><table class="rows"><tbody>${data.donors.map((d) => `<tr><td class="t"><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${kindBadge(d.kind)} ${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}</div></td><td class="num strong a">${moneyShort(d.total_all)}</td></tr>`).join('') || '<tr><td class="muted">None</td></tr>'}</tbody></table></div></div>
       </section>
       <p class="muted small">Search matches the start of words in names, cities and employers. Donors are listed under the name exactly as a committee filed it; spellings are combined only through reviewed corrections.</p>`;
   }
@@ -253,8 +265,8 @@
       <div class="page-head"><div class="title"><h1>Top recipients${year === 'all' ? ', all years' : ', ' + year}</h1><p class="muted">Ranked by contributions reported, latest version of each report.</p></div>
         <div class="tools">${yearPills(data.years, year, base, tq)}
           <div class="pills">${['all', 'candidate', 'committee'].map((t) => `<a class="pill" href="${base}?year=${year}&type=${t}" data-link ${type === t ? 'aria-current="page"' : ''}>${{ all: 'All filers', candidate: 'Candidates', committee: 'Committees' }[t]}</a>`).join('')}</div></div></div>
-      <div class="card"><div class="table-wrap"><table><thead><tr><th>#</th><th>Recipient</th><th>Type</th><th class="num">Raised</th><th class="num">In-kind</th><th class="num">Spent</th></tr></thead><tbody>
-        ${data.rows.map((f, i) => `<tr><td class="muted">${offset + i + 1}</td><td><a class="name" href="/filer/${encodeURIComponent(f.filer_id)}" data-link>${esc(niceName(f.name))}</a><div class="sub">${esc([officeText(f), place(f.city, f.state)].filter(Boolean).join(' · '))}</div></td><td>${filerTypeBadge(f)} ${partyBadge(f.party)}</td><td class="num strong">${money(f.total)}</td><td class="num muted">${f.inkind ? moneyShort(f.inkind) : ''}</td><td class="num muted">${moneyShort(f.expenses)}</td></tr>`).join('')}
+      <div class="card"><div class="table-wrap"><table class="rows"><thead><tr><th>#</th><th>Recipient</th><th>Type</th><th class="num">Raised</th><th class="num">In-kind</th><th class="num">Spent</th></tr></thead><tbody>
+        ${data.rows.map((f, i) => `<tr><td class="muted m-hide">${offset + i + 1}</td><td class="t"><a class="name" href="/filer/${encodeURIComponent(f.filer_id)}" data-link><span class="m-only">${offset + i + 1}. </span>${esc(niceName(f.name))}</a><div class="sub">${esc([officeText(f), place(f.city, f.state)].filter(Boolean).join(' · '))}<span class="m-only"> · ${filerTypeBadge(f)} ${partyBadge(f.party)}${f.inkind ? ` · ${moneyShort(f.inkind)} in-kind` : ''} · spent ${moneyShort(f.expenses)}</span></div></td><td class="m-hide">${filerTypeBadge(f)} ${partyBadge(f.party)}</td><td class="num strong a">${money(f.total)}</td><td class="num muted m-hide">${f.inkind ? moneyShort(f.inkind) : ''}</td><td class="num muted m-hide">${moneyShort(f.expenses)}</td></tr>`).join('')}
       </tbody></table></div>
       <div class="card-foot"><span>Showing ${offset + 1}–${offset + data.rows.length}.${type === 'candidate' ? ' Most candidate money is raised by committees that file separately; linking a candidate to their committees is a reviewed correction, so this list understates candidates whose committees are not grouped yet.' : ''}</span><span class="pager">${offset > 0 ? `<a class="btn" href="${base}?year=${year}${tq}&offset=${Math.max(0, offset - 50)}" data-link>← Previous</a>` : ''}${data.rows.length === 50 ? `<a class="btn" href="${base}?year=${year}${tq}&offset=${offset + 50}" data-link>Next →</a>` : ''}</span></div></div>`;
   }
@@ -271,8 +283,8 @@
       <div class="page-head"><div class="title"><h1>Biggest donors${year === 'all' ? ', all years' : ', ' + year}</h1><p class="muted">Each row is one name, city and state as filed. Spellings are combined only through reviewed corrections, so one person can appear more than once.</p></div>
         <div class="tools">${yearPills(data.years, year, base, kq)}
           <div class="pills">${['individual', 'organization', 'committee', 'all'].map((k) => `<a class="pill" href="${base}?year=${year}&kind=${k}" data-link ${kind === k ? 'aria-current="page"' : ''}>${{ individual: 'Individuals', organization: 'Organizations', committee: 'Committees', all: 'All' }[k]}</a>`).join('')}</div></div></div>
-      <div class="card"><div class="table-wrap"><table><thead><tr><th>#</th><th>Donor</th><th>Kind</th><th class="num">Recipients</th><th class="num">Gifts</th><th class="num">Total</th></tr></thead><tbody>
-        ${data.rows.map((d, i) => `<tr><td class="muted">${offset + i + 1}</td><td><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}${d.entity_id ? ` · <span class="badge b-gray">${d.n_keys > 1 ? d.n_keys + ' spellings merged' : 'merged'}</span>` : ''}</div></td><td>${kindBadge(d.kind)}</td><td class="num">${int(d.n_recipients)}</td><td class="num">${int(d.n)}</td><td class="num strong">${money(d.total)}</td></tr>`).join('')}
+      <div class="card"><div class="table-wrap"><table class="rows"><thead><tr><th>#</th><th>Donor</th><th>Kind</th><th class="num">Recipients</th><th class="num">Gifts</th><th class="num">Total</th></tr></thead><tbody>
+        ${data.rows.map((d, i) => `<tr><td class="muted m-hide">${offset + i + 1}</td><td class="t"><a class="name" href="${donorHref(d)}" data-link><span class="m-only">${offset + i + 1}. </span>${esc(niceName(d.name))}</a><div class="sub">${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}${d.entity_id ? ` · <span class="badge b-gray">${d.n_keys > 1 ? d.n_keys + ' spellings merged' : 'merged'}</span>` : ''}<span class="m-only"> · ${kindBadge(d.kind)} · ${int(d.n)} gifts to ${int(d.n_recipients)}</span></div></td><td class="m-hide">${kindBadge(d.kind)}</td><td class="num m-hide">${int(d.n_recipients)}</td><td class="num m-hide">${int(d.n)}</td><td class="num strong a">${money(d.total)}</td></tr>`).join('')}
       </tbody></table></div>
       <div class="card-foot"><span>Showing ${offset + 1}–${offset + data.rows.length}. "Individual" is a heuristic: anything not filed as a political committee and without organization words in its name.</span><span class="pager">${offset > 0 ? `<a class="btn" href="${base}?year=${year}${kq}&offset=${Math.max(0, offset - 50)}" data-link>← Previous</a>` : ''}${data.rows.length === 50 ? `<a class="btn" href="${base}?year=${year}${kq}&offset=${offset + 50}" data-link>Next →</a>` : ''}</span></div></div>`;
   }
@@ -297,7 +309,7 @@
       { k: 'committee', c: 'purple', l: 'Cash from committees (I-A, I-C)', v: s.cash_committee },
       { k: 'other', c: 'green', l: 'Cash from individuals and others (I-B, I-D)', v: s.cash_other },
     ];
-    return `<div class="stack" role="img" aria-label="${parts.map((p) => `${p.l} ${fmtPct(pct(p.v, total))}`).join(', ')}">${parts.filter((p) => p.v > 0).map((p) => `<i class="c-${p.c}" style="flex:${p.v} 0 0" title="${esc(p.l)}: ${money(p.v)}"></i>`).join('')}</div>
+    return `<div class="rows" role="img" aria-label="${parts.map((p) => `${p.l} ${fmtPct(pct(p.v, total))}`).join(', ')}">${parts.filter((p) => p.v > 0).map((p) => `<i class="c-${p.c}" style="flex:${p.v} 0 0" title="${esc(p.l)}: ${money(p.v)}"></i>`).join('')}</div>
       <ul class="legend">${parts.map((p) => `<li><span class="sw c-${p.c}"></span><span class="l">${esc(p.l)}</span><span class="strong">${moneyShort(p.v)}</span><span class="pct">${fmtPct(pct(p.v, total))}</span></li>`).join('')}</ul>`;
   }
 
@@ -355,8 +367,8 @@
 
       <section class="card" id="donors">
         <div class="card-head"><h2>Top donors, ${yearLabel}</h2><span class="muted small">Grouped by name, city and state as filed</span></div>
-        <div class="table-wrap"><table><thead><tr><th>Donor</th><th>Kind</th><th class="num">Gifts</th><th class="num">Total</th><th>Share</th></tr></thead><tbody>
-          ${data.top_donors.map((d) => `<tr><td><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}${d.inkind > 0 ? ` · <span class="badge b-pink">${d.inkind >= d.total * 0.99 ? 'in-kind' : 'partly in-kind'}</span>` : ''}${d.entity_id ? ` · <span class="badge b-gray">${d.n_keys > 1 ? d.n_keys + ' spellings merged' : 'merged'}</span>` : ''}</div></td><td>${kindBadge(d.kind)}</td><td class="num">${int(d.n)}</td><td class="num strong">${money(d.total)}</td><td><div class="share"><i style="width:${Math.max(2, pct(d.total, s.total))}%"></i><span class="muted small">${fmtPct(pct(d.total, s.total))}</span></div></td></tr>`).join('') || '<tr><td class="muted" colspan="5">No contributions in this window.</td></tr>'}
+        <div class="table-wrap"><table class="rows"><thead><tr><th>Donor</th><th>Kind</th><th class="num">Gifts</th><th class="num">Total</th><th>Share</th></tr></thead><tbody>
+          ${data.top_donors.map((d) => `<tr><td class="t"><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}${d.inkind > 0 ? ` · <span class="badge b-pink">${d.inkind >= d.total * 0.99 ? 'in-kind' : 'partly in-kind'}</span>` : ''}${d.entity_id ? ` · <span class="badge b-gray">${d.n_keys > 1 ? d.n_keys + ' spellings merged' : 'merged'}</span>` : ''}<span class="m-only"> · ${kindBadge(d.kind)} · ${int(d.n)} gift${d.n == 1 ? '' : 's'} · ${fmtPct(pct(d.total, s.total))} of total</span></div></td><td class="m-hide">${kindBadge(d.kind)}</td><td class="num m-hide">${int(d.n)}</td><td class="num strong a">${money(d.total)}</td><td class="m-hide"><div class="share"><i style="width:${Math.max(2, pct(d.total, s.total))}%"></i><span class="muted small">${fmtPct(pct(d.total, s.total))}</span></div></td></tr>`).join('') || '<tr><td class="muted" colspan="5">No contributions in this window.</td></tr>'}
         </tbody></table></div>
         <div class="card-foot"><span>${int(s.n_donors)} donors in total.</span><a href="#contributions">Browse every contribution ↓</a></div>
       </section>
@@ -375,15 +387,15 @@
       <section class="grid-2">
         <div class="card">
           <div class="card-head"><h2>Largest payees, ${yearLabel}</h2><a href="#" id="expenses-link">Browse expenses</a></div>
-          <div class="table-wrap"><table><thead><tr><th>Payee</th><th class="num">Payments</th><th class="num">Total</th></tr></thead><tbody>
-            ${data.payees.map((p) => `<tr><td><span class="strong">${esc(niceName(p.payee))}</span><div class="sub">${esc(place(p.city, p.state))}</div></td><td class="num">${int(p.n)}</td><td class="num strong">${money(p.total)}</td></tr>`).join('') || '<tr><td class="muted" colspan="3">No expenses in this window.</td></tr>'}
+          <div class="table-wrap"><table class="rows"><thead><tr><th>Payee</th><th class="num">Payments</th><th class="num">Total</th></tr></thead><tbody>
+            ${data.payees.map((p) => `<tr><td class="t"><span class="strong">${esc(niceName(p.payee))}</span><div class="sub">${esc(place(p.city, p.state))}<span class="m-only"> · ${int(p.n)} payment${p.n == 1 ? '' : 's'}</span></div></td><td class="num m-hide">${int(p.n)}</td><td class="num strong a">${money(p.total)}</td></tr>`).join('') || '<tr><td class="muted" colspan="3">No expenses in this window.</td></tr>'}
           </tbody></table></div>
           <div id="expense-table"></div>
         </div>
         <div class="card" id="reports">
           <div class="card-head"><h2>Reports filed, ${yearLabel}</h2></div>
-          <div class="table-wrap"><table><thead><tr><th>Period</th><th>Filed</th><th class="num">Receipts</th><th></th></tr></thead><tbody>
-            ${data.reports.map((r) => `<tr${r.is_current ? '' : ' style="opacity:.55"'}><td><span class="strong">${esc(cycleLabel(r.cycle))}</span><div class="sub">${r.eyear}${data.ids.length > 1 ? ' · ' + esc(r.filer_id) : ''} · report ${r.cf_id}</div></td><td>${fmtDate(r.submitted)}</td><td class="num">${money((r.monetary || 0) + (r.inkind || 0))}</td><td>${r.amend ? '<span class="badge b-blue">Amended</span>' : ''} ${r.terminate ? '<span class="badge b-gray">Termination</span>' : ''} ${r.is_current ? '' : '<span class="badge b-gray">Superseded</span>'}</td></tr>`).join('') || '<tr><td class="muted" colspan="4">No reports.</td></tr>'}
+          <div class="table-wrap"><table class="rows"><thead><tr><th>Period</th><th>Filed</th><th class="num">Receipts</th><th></th></tr></thead><tbody>
+            ${data.reports.map((r) => { const flags = `${r.amend ? '<span class="badge b-blue">Amended</span>' : ''} ${r.terminate ? '<span class="badge b-gray">Termination</span>' : ''} ${r.is_current ? '' : '<span class="badge b-gray">Superseded</span>'}`; return `<tr${r.is_current ? '' : ' style="opacity:.55"'}><td class="t"><span class="strong">${esc(cycleLabel(r.cycle))}</span><div class="sub">${r.eyear}${data.ids.length > 1 ? ' · ' + esc(r.filer_id) : ''} · report ${r.cf_id}<span class="m-only"> · filed ${fmtDate(r.submitted)} ${flags}</span></div></td><td class="m-hide">${fmtDate(r.submitted)}</td><td class="num a">${money((r.monetary || 0) + (r.inkind || 0))}</td><td class="m-hide">${flags}</td></tr>`; }).join('') || '<tr><td class="muted" colspan="4">No reports.</td></tr>'}
           </tbody></table></div>
           <div class="card-foot"><span>Superseded reports were replaced by a later filing for the same period and are not counted.</span></div>
         </div>
@@ -396,16 +408,20 @@
       const fd = new FormData(filters);
       const qs = new URLSearchParams({ year, combine: combine ? 1 : 0, limit: 50, offset });
       for (const [k, v] of fd.entries()) if (v) qs.set(k, v);
+      // Keep the current height while reloading so nothing below jumps under a finger mid-tap.
+      contribTable.style.minHeight = contribTable.offsetHeight + 'px';
       contribTable.innerHTML = '<div class="loading">Loading…</div>';
       const d = await api(`/filer/${encodeURIComponent(f.filer_id)}/contributions?${qs}`);
-      contribTable.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Contributor</th><th>Kind</th><th class="num">Amount</th><th>Report</th></tr></thead><tbody>
-        ${d.rows.map((c) => `<tr><td style="white-space:nowrap">${fmtDate(c.date) || '<span class="muted">no date</span>'}</td><td><a class="name" href="${donorHref(c)}" data-link>${esc(niceName(c.contributor) || '(blank)')}</a><div class="sub">${esc([place(c.city, c.state), c.occupation ? niceName(c.occupation) : '', c.employer ? niceName(c.employer) : ''].filter(Boolean).join(' · '))}${c.description ? ` · <em>${esc(c.description)}</em>` : ''}</div></td><td>${sectionBadge(c.section)} <span class="muted small">${esc(c.section || '')}</span></td><td class="num strong">${money(c.amount)}</td><td class="small muted">${esc(cycleLabel(c.cycle))}${data.ids.length > 1 ? '<br>' + esc(c.filer_id) : ''}</td></tr>`).join('') || '<tr><td class="muted" colspan="5">Nothing matches.</td></tr>'}
+      contribTable.style.minHeight = '';
+      contribTable.innerHTML = `<div class="table-wrap"><table class="rows"><thead><tr><th>Date</th><th>Contributor</th><th>Kind</th><th class="num">Amount</th><th>Report</th></tr></thead><tbody>
+        ${d.rows.map((c) => `<tr><td style="white-space:nowrap" class="m-hide">${fmtDate(c.date) || '<span class="muted">no date</span>'}</td><td class="t"><a class="name" href="${donorHref(c)}" data-link>${esc(niceName(c.contributor) || '(blank)')}</a><div class="sub">${esc([place(c.city, c.state), c.occupation ? niceName(c.occupation) : '', c.employer ? niceName(c.employer) : ''].filter(Boolean).join(' · '))}${c.description ? ` · <em>${esc(c.description)}</em>` : ''}<span class="m-only"> · ${fmtDate(c.date) || 'no date'} · ${sectionBadge(c.section)} · ${esc(cycleLabel(c.cycle))}</span></div></td><td class="m-hide">${sectionBadge(c.section)} <span class="muted small">${esc(c.section || '')}</span></td><td class="num strong a">${money(c.amount)}</td><td class="small muted m-hide">${esc(cycleLabel(c.cycle))}${data.ids.length > 1 ? '<br>' + esc(c.filer_id) : ''}</td></tr>`).join('') || '<tr><td class="muted" colspan="5">Nothing matches.</td></tr>'}
       </tbody></table></div>
       <div class="card-foot"><span>${int(d.count)} contributions totaling ${money(d.total)}. Showing ${d.count ? offset + 1 : 0}–${offset + d.rows.length}.</span><span class="pager"><button class="btn" id="cp" ${offset ? '' : 'disabled'}>← Previous</button><button class="btn" id="cn" ${offset + 50 < d.count ? '' : 'disabled'}>Next →</button></span></div>`;
       contribTable.querySelector('#cp').onclick = () => { offset = Math.max(0, offset - 50); loadContribs(); };
       contribTable.querySelector('#cn').onclick = () => { offset += 50; loadContribs(); };
     }
-    filters.addEventListener('change', () => { offset = 0; loadContribs(); });
+    // The text box reloads as you type (below); its blur-time change event must not reload again.
+    filters.addEventListener('change', (e) => { if (e.target.id === 'cf-q') return; offset = 0; loadContribs(); });
     filters.addEventListener('submit', (e) => { e.preventDefault(); offset = 0; loadContribs(); });
     let t = null;
     filters.querySelector('#cf-q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { offset = 0; loadContribs(); }, 250); });
@@ -416,8 +432,8 @@
       e.preventDefault();
       expTable.innerHTML = '<div class="loading">Loading…</div>';
       const d = await api(`/filer/${encodeURIComponent(f.filer_id)}/expenses?year=${year}&combine=${combine ? 1 : 0}&limit=100`);
-      expTable.innerHTML = `<div class="card-head" style="border-top:1px solid var(--line-2)"><h3>Largest expenses</h3><span class="muted small">${int(d.count)} payments, ${money(d.total)}</span></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Payee</th><th>Purpose</th><th class="num">Amount</th></tr></thead><tbody>
-        ${d.rows.map((x) => `<tr><td style="white-space:nowrap">${fmtDate(x.date)}</td><td><span class="strong">${esc(niceName(x.payee))}</span><div class="sub">${esc(place(x.city, x.state))}</div></td><td class="small">${esc(x.description || '')}</td><td class="num strong">${money(x.amount)}</td></tr>`).join('')}
+      expTable.innerHTML = `<div class="card-head" style="border-top:1px solid var(--line-2)"><h3>Largest expenses</h3><span class="muted small">${int(d.count)} payments, ${money(d.total)}</span></div><div class="table-wrap"><table class="rows"><thead><tr><th>Date</th><th>Payee</th><th>Purpose</th><th class="num">Amount</th></tr></thead><tbody>
+        ${d.rows.map((x) => `<tr><td style="white-space:nowrap" class="m-hide">${fmtDate(x.date)}</td><td class="t"><span class="strong">${esc(niceName(x.payee))}</span><div class="sub">${esc([place(x.city, x.state), x.description].filter(Boolean).join(' · '))}<span class="m-only"> · ${fmtDate(x.date)}</span></div></td><td class="small m-hide">${esc(x.description || '')}</td><td class="num strong a">${money(x.amount)}</td></tr>`).join('')}
       </tbody></table></div>`;
     });
   }
@@ -462,12 +478,12 @@
       <section class="grid-2">
         <div style="display:flex;flex-direction:column;gap:20px">
           <div class="card"><div class="card-head"><h2>Recipients, ${yearLabel}</h2></div>
-            <div class="table-wrap"><table><thead><tr><th>Recipient</th><th>Type</th><th class="num">Gifts</th><th class="num">Total</th></tr></thead><tbody>
-              ${data.recipients.map((f) => `<tr><td><a class="name" href="/filer/${encodeURIComponent(f.filer_id)}?year=${year}" data-link>${esc(niceName(f.name))}</a><div class="sub">${esc([officeText(f), place(f.city, f.state), year === 'all' && f.first_year ? (f.first_year === f.last_year ? f.first_year : f.first_year + '–' + f.last_year) : ''].filter(Boolean).join(' · '))}</div></td><td>${filerTypeBadge(f)} ${partyBadge(f.party)}</td><td class="num">${int(f.n)}</td><td class="num strong">${money(f.total)}${f.inkind > 0 ? `<div class="sub">${moneyShort(f.inkind)} in-kind</div>` : ''}</td></tr>`).join('') || '<tr><td class="muted" colspan="4">Nothing in this window.</td></tr>'}
+            <div class="table-wrap"><table class="rows"><thead><tr><th>Recipient</th><th>Type</th><th class="num">Gifts</th><th class="num">Total</th></tr></thead><tbody>
+              ${data.recipients.map((f) => `<tr><td class="t"><a class="name" href="/filer/${encodeURIComponent(f.filer_id)}?year=${year}" data-link>${esc(niceName(f.name))}</a><div class="sub">${esc([officeText(f), place(f.city, f.state), year === 'all' && f.first_year ? (f.first_year === f.last_year ? f.first_year : f.first_year + '–' + f.last_year) : ''].filter(Boolean).join(' · '))}<span class="m-only"> · ${filerTypeBadge(f)} ${partyBadge(f.party)} · ${int(f.n)} gift${f.n == 1 ? '' : 's'}</span></div></td><td class="m-hide">${filerTypeBadge(f)} ${partyBadge(f.party)}</td><td class="num m-hide">${int(f.n)}</td><td class="num strong a">${money(f.total)}${f.inkind > 0 ? `<div class="sub">${moneyShort(f.inkind)} in-kind</div>` : ''}</td></tr>`).join('') || '<tr><td class="muted" colspan="4">Nothing in this window.</td></tr>'}
             </tbody></table></div></div>
           <div class="card"><div class="card-head"><h2>Every contribution, ${yearLabel}</h2><span class="muted small">${data.contributions.length === 200 ? 'largest 200' : data.contributions.length}</span></div>
-            <div class="table-wrap"><table><thead><tr><th>Date</th><th>Recipient</th><th>Filed as</th><th class="num">Amount</th><th>Report</th></tr></thead><tbody>
-              ${data.contributions.map((c) => `<tr><td style="white-space:nowrap">${fmtDate(c.date) || '<span class="muted">no date</span>'}</td><td><a class="name" href="/filer/${encodeURIComponent(c.filer_id)}?year=${c.eyear}" data-link>${esc(niceName(c.filer_name))}</a></td><td><span>${esc(c.contributor)}</span><div class="sub">${esc([place(c.city, c.state), c.occupation, c.employer].filter(Boolean).join(' · '))}</div></td><td class="num strong">${money(c.amount)} ${isInkind(c.section) ? '<span class="badge b-pink">in-kind</span>' : ''}</td><td class="small muted">${esc(cycleLabel(c.cycle))}<br>${c.eyear} · ${esc(label('section', c.section, c.section || 'unlabeled'))}</td></tr>`).join('')}
+            <div class="table-wrap"><table class="rows"><thead><tr><th>Date</th><th>Recipient</th><th>Filed as</th><th class="num">Amount</th><th>Report</th></tr></thead><tbody>
+              ${data.contributions.map((c) => `<tr><td style="white-space:nowrap" class="m-hide">${fmtDate(c.date) || '<span class="muted">no date</span>'}</td><td class="t"><a class="name" href="/filer/${encodeURIComponent(c.filer_id)}?year=${c.eyear}" data-link>${esc(niceName(c.filer_name))}</a><div class="sub m-only">${fmtDate(c.date) || 'no date'} · filed as ${esc(c.contributor)}${c.employer ? ', ' + esc(c.employer) : ''} · ${esc(cycleLabel(c.cycle))} ${c.eyear}</div></td><td class="m-hide"><span>${esc(c.contributor)}</span><div class="sub">${esc([place(c.city, c.state), c.occupation, c.employer].filter(Boolean).join(' · '))}</div></td><td class="num strong a">${money(c.amount)} ${isInkind(c.section) ? '<span class="badge b-pink">in-kind</span>' : ''}</td><td class="small muted m-hide">${esc(cycleLabel(c.cycle))}<br>${c.eyear} · ${esc(label('section', c.section, c.section || 'unlabeled'))}</td></tr>`).join('')}
             </tbody></table></div></div>
         </div>
         <aside style="display:flex;flex-direction:column;gap:16px">

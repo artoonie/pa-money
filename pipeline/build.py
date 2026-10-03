@@ -417,11 +417,16 @@ class Builder:
         db = self.db
         counts = {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                   for t in ("filer", "report", "donor", "contribution", "expense")}
-        latest_full = db.execute("SELECT eyear FROM filer_year GROUP BY eyear ORDER BY SUM(total) DESC LIMIT 1").fetchone()
+        # Default year for landing pages: the most recent year with at least a tenth of the biggest year's money,
+        # so a freshly started year with a handful of reports does not become the default.
+        totals = db.execute("SELECT eyear, SUM(total) FROM filer_year GROUP BY eyear ORDER BY eyear").fetchall()
+        biggest = max((t for _, t in totals), default=0)
+        candidates = [y for y, t in totals if t >= 0.1 * biggest]
+        default_year = candidates[-1] if candidates else (self.years[-1] if self.years else None)
         meta = {
             "built_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "years": self.years,
-            "default_year": latest_full[0] if latest_full else (self.years[-1] if self.years else None),
+            "default_year": default_year,
             "counts": counts,
             "source": "https://www.pa.gov/agencies/dos/resources/voting-and-elections-resources/campaign-finance-data.html",
             "warnings": self.warnings[:50],
