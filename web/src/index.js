@@ -6,7 +6,7 @@ const CACHE = 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400'
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    if (!url.pathname.startsWith('/api/')) return pageWithSocialTags(request, env, url);
     // Workers responses are not cached at the edge unless we ask. Data changes only when the
     // database is reloaded, so cache every successful GET for a day keyed on the full URL.
     const cacheable = request.method === 'GET' && !url.searchParams.has('nocache');
@@ -375,4 +375,94 @@ async function donorView(env, members, entity, q, focus = null) {
     summary: { ...summary, n_recipients: recipients.length, largest, rank },
     recipients, contributions, lookups: lk,
   };
+}
+
+
+// ---- social previews ----------------------------------------------------------------
+// Crawlers do not run the app, so the HTML itself must carry the page's title, description and image.
+// Everything else about the page still renders client-side.
+
+const FALLBACK_IMAGE = { '/': 'home', filer: 'recipient', donor: 'donor', entity: 'donor', top: 'home', donors: 'donor', search: 'home', about: 'home' };
+
+async function pageWithSocialTags(request, env, url) {
+  const res = await env.ASSETS.fetch(request);
+  const ct = res.headers.get('content-type') || '';
+  if (request.method !== 'GET' || !ct.includes('text/html')) return res;
+  let meta;
+  try { meta = await socialMeta(env, url); } catch { meta = null; }
+  if (!meta) meta = HOME_META;
+  const origin = /^(localhost|127\.0\.0\.1)(:|$)/.test(url.host) ? url.origin : 'https://' + url.host;
+  const image = meta.image.startsWith('http') ? meta.image : origin + meta.image;
+  const canonical = origin + url.pathname + (meta.keepQuery ? url.search : '');
+  const set = (prop, value) => ({ element(el) { el.setAttribute('content', value); } });
+  const rewriter = new HTMLRewriter()
+    .on('title', { element(el) { el.setInnerContent(meta.title); } })
+    .on('meta[name="description"]', set('content', meta.description))
+    .on('meta[property="og:title"]', set('content', meta.title))
+    .on('meta[property="og:description"]', set('content', meta.description))
+    .on('meta[property="og:image"]', set('content', image))
+    .on('meta[name="twitter:title"]', set('content', meta.title))
+    .on('meta[name="twitter:description"]', set('content', meta.description))
+    .on('meta[name="twitter:image"]', set('content', image))
+    .on('head', { element(el) { el.append(`<meta property="og:url" content="${esc(canonical)}"><link rel="canonical" href="${esc(canonical)}">`, { html: true }); } });
+  const out = rewriter.transform(res);
+  return out;
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+const short = (n) => {
+  n = Number(n) || 0;
+  const a = Math.abs(n);
+  if (a >= 1e6) return '$' + (n / 1e6).toFixed(a >= 1e8 ? 0 : a >= 1e7 ? 1 : 2) + 'M';
+  if (a >= 1e3) return '$' + (n / 1e3).toFixed(a >= 1e5 ? 0 : 1) + 'K';
+  return '$' + Math.round(n).toLocaleString('en-US');
+};
+const SMALL_WORDS = new Set(['of', 'for', 'and', 'the', 'to', 'at', 'in', 'on', 'by', 'a', 'an', 'or']);
+const tc = (s) => (s && s === s.toUpperCase() && /[A-Z]/.test(s)
+  ? s.toLowerCase().replace(/(^|[\s(\-/.])([a-z]+)/g, (m, p, w) => p + (SMALL_WORDS.has(w) && p !== '' ? w : w[0].toUpperCase() + w.slice(1))).replace(/\b(Pac|Llc|Ag|Da|Pa|Dc|Ny|Nj|Md|Us)\b/g, (w) => w.toUpperCase())
+  : s);
+const HOME_META = { title: 'PA Money', description: 'Who funds Pennsylvania politics? Every contribution, expense and filer reported to the PA Department of State, searchable by who gave and who received.', image: '/og/home.png', keepQuery: false };
+
+async function socialMeta(env, url) {
+  const p = url.pathname.replace(/\/+$/, '') || '/';
+  const q = url.searchParams;
+  let m;
+  if ((m = p.match(/^\/filer\/([^/]+)$/))) {
+    const id = decodeURIComponent(m[1]);
+    const f = await one(env, 'SELECT filer_id, name, office, party, city, state, total_all, first_year, last_year FROM filer WHERE filer_id = ?', [id]);
+    if (!f) return null;
+    const yearParam = q.get('year');
+    const years = await all(env, 'SELECT eyear, total, inkind, n_contrib FROM filer_year WHERE filer_id = ? ORDER BY eyear', [id]);
+    let y = years.length ? years[years.length - 1] : null;
+    if (yearParam && yearParam !== 'all') y = years.find((r) => String(r.eyear) === yearParam) || y;
+    const parts = [];
+    if (yearParam === 'all' || !y) parts.push(`raised ${short(f.total_all)} since ${f.first_year}`);
+    else parts.push(`raised ${short(y.total)} in ${y.eyear} from ${Number(y.n_contrib).toLocaleString('en-US')} contributions${y.inkind > 0 && y.total > 0 ? `, ${Math.round(100 * y.inkind / y.total)}% in-kind` : ''}`);
+    await lookups(env);
+    const where = [f.office ? label(env, 'office', f.office) : '', [tc(f.city), f.state].filter(Boolean).join(', ')].filter(Boolean);
+    return { title: `${tc(f.name)} · PA Money`, description: `${tc(f.name)} ${parts.join(' ')}. ${where.length ? where.join(' · ') + '. ' : ''}Every donor and expense, from Pennsylvania's public filings.`, image: '/og/recipient.png', keepQuery: !!yearParam };
+  }
+  if ((m = p.match(/^\/(donor|entity)\/([^/]+)$/))) {
+    const isEntity = m[1] === 'entity';
+    const key = decodeURIComponent(m[2]);
+    const d = isEntity
+      ? await one(env, 'SELECT e.name, e.kind, SUM(d.total_all) total_all, MIN(d.first_year) first_year, MAX(d.last_year) last_year, COUNT(*) n_keys FROM entity e JOIN donor d ON d.entity_id = e.entity_id WHERE e.entity_id = ? GROUP BY e.entity_id', [key])
+      : await one(env, 'SELECT name, kind, total_all, first_year, last_year, city, state, 1 n_keys FROM donor WHERE donor_id = ?', [Number(key)]);
+    if (!d || !d.name) return null;
+    const span = d.first_year && d.last_year ? (d.first_year === d.last_year ? `in ${d.first_year}` : `from ${d.first_year} to ${d.last_year}`) : '';
+    return { title: `${tc(d.name)} · PA Money`, description: `${tc(d.name)} gave ${short(d.total_all)} to Pennsylvania candidates and committees ${span}.${d.n_keys > 1 ? ` Combines ${d.n_keys} filed spellings under a reviewed correction.` : ''} See every recipient.`, image: '/og/donor.png', keepQuery: false };
+  }
+  if (p === '/') return HOME_META;
+  if (p === '/top') return { title: 'Top recipients · PA Money', description: 'Which Pennsylvania candidates and committees raised the most, by year, from the state\'s public campaign finance filings.', image: '/og/home.png', keepQuery: !!q.get('year') };
+  if (p === '/donors') return { title: 'Biggest donors · PA Money', description: 'The biggest individual, organization and committee donors in Pennsylvania politics, by year.', image: '/og/donor.png', keepQuery: !!q.get('year') };
+  if (p === '/search') { const s = q.get('q') || ''; return s ? { title: `“${s}” · PA Money`, description: `Pennsylvania campaign finance results for “${s}”: recipients and donors, ranked by money.`, image: '/og/home.png', keepQuery: true } : null; }
+  if (p === '/about') return { title: 'Data & corrections · PA Money', description: 'How PA Money reads the state export, what it counts, and how anyone can propose a correction in the open.', image: '/og/home.png', keepQuery: false };
+  return null;
+}
+
+function label(env, kind, code) {
+  return (lookupCache && lookupCache[kind] && lookupCache[kind][code] && lookupCache[kind][code].label) || code;
 }
