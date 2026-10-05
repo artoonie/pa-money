@@ -126,12 +126,16 @@ async function search(env, text, limit) {
     FROM (SELECT DISTINCT filer_id FROM filer_fts WHERE filer_fts MATCH ?) s
     JOIN filer f ON f.filer_id = s.filer_id
     ORDER BY f.total_all DESC, f.last_year DESC LIMIT ?`, [match, limit]);
+  // Spellings merged into one entity collapse into a single result carrying the entity's name and combined total.
   const donors = await all(env, `
-    SELECT d.donor_id, d.name, d.city, d.state, d.employer, d.occupation, d.kind, d.entity_id, d.total_all, d.n_contrib, d.first_year, d.last_year
+    SELECT MIN(d.donor_id) donor_id, COALESCE(MAX(e.name), MIN(d.name)) name, MIN(d.city) city, MIN(d.state) state, MIN(d.employer) employer,
+           MIN(d.occupation) occupation, COALESCE(MAX(e.kind), MIN(d.kind)) kind, d.entity_id, SUM(d.total_all) total_all, SUM(d.n_contrib) n_contrib,
+           MIN(d.first_year) first_year, MAX(d.last_year) last_year, COUNT(*) n_keys
     FROM (SELECT DISTINCT donor_id FROM donor_fts WHERE donor_fts MATCH ?) s
-    JOIN donor d ON d.donor_id = s.donor_id
+    JOIN donor d ON d.donor_id = s.donor_id LEFT JOIN entity e ON e.entity_id = d.entity_id
     WHERE d.kind != 'aggregate'
-    ORDER BY d.total_all DESC LIMIT ?`, [match, limit]);
+    GROUP BY COALESCE(d.entity_id, 'd' || d.donor_id)
+    ORDER BY total_all DESC LIMIT ?`, [match, limit]);
   return { q: text, filers, donors };
 }
 

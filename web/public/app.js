@@ -181,7 +181,7 @@
     if (data.donors.length) {
       h += '<div class="group">Donors</div>';
       for (const d of data.donors) {
-        const extra = [place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · ');
+        const extra = [place(d.city, d.state), d.employer ? niceName(d.employer) : '', d.n_keys > 1 ? `${d.n_keys} spellings merged` : ''].filter(Boolean).join(' · ');
         h += `<a class="res" href="${donorHref(d)}" data-link><span class="t"><span class="n">${esc(niceName(d.name))}</span><span class="s">${kindBadge(d.kind)} ${esc(extra)}</span></span><span class="amt">${moneyShort(d.total_all)}</span></a>`;
       }
     }
@@ -336,9 +336,9 @@
         <div class="card"><div class="card-head"><h2>Recipients</h2><span class="muted small">${data.filers.length === 50 ? 'first 50' : data.filers.length} · ranked by money raised</span></div>
           <div class="table-wrap"><table class="rows"><tbody>${data.filers.map((f) => `<tr><td class="t"><a class="name" href="/filer/${encodeURIComponent(f.filer_id)}" data-link>${esc(niceName(f.name))}</a><div class="sub">${filerSub(f)}${f.first_year ? ` · ${f.first_year === f.last_year ? f.first_year : f.first_year + '–' + f.last_year}` : ''}</div></td><td class="num strong a">${moneyShort(f.total_all)}</td></tr>`).join('') || '<tr><td class="muted">None</td></tr>'}</tbody></table></div></div>
         <div class="card"><div class="card-head"><h2>Donors</h2><span class="muted small">${data.donors.length === 50 ? 'first 50' : data.donors.length} · ranked by money given</span></div>
-          <div class="table-wrap"><table class="rows"><tbody>${data.donors.map((d) => `<tr><td class="t"><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${kindBadge(d.kind)} ${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}</div></td><td class="num strong a">${moneyShort(d.total_all)}</td></tr>`).join('') || '<tr><td class="muted">None</td></tr>'}</tbody></table></div></div>
+          <div class="table-wrap"><table class="rows"><tbody>${data.donors.map((d) => `<tr><td class="t"><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${kindBadge(d.kind)} ${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}${d.n_keys > 1 ? ` · <span class="badge b-gray">${d.n_keys} spellings merged</span>` : ''}</div></td><td class="num strong a">${moneyShort(d.total_all)}</td></tr>`).join('') || '<tr><td class="muted">None</td></tr>'}</tbody></table></div></div>
       </section>
-      <p class="muted small">Search matches the start of words in names, cities and employers. Donors are listed under the name exactly as a committee filed it; spellings are combined only through reviewed corrections.</p>`;
+      <p class="muted small">Search matches the start of words in names, cities and employers. Donors are listed under the name exactly as a committee filed it; spellings are combined only through reviewed corrections, and a merged donor appears once.</p>`;
   }
 
   async function topPage(q) {
