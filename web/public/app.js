@@ -63,6 +63,7 @@
       junk: '<span class="badge b-gray">Not a donor</span>' }[k] || '';
   }
   const isInkind = (s) => s === 'IIF' || s === 'IIG';
+  const isCommittee = (f) => !['1', '3'].includes(String(f.filer_type || ''));   // committees sometimes lack a type code in the export
   const flagBadge = (c) => (c.flag === 'date_in_amount' ? ' <span class="badge b-gray" title="The amount field in this filing holds a date, so the real amount is unknown. Excluded from totals.">amount is a date</span>' : '');
   function sectionBadge(s) {
     return isInkind(s) ? '<span class="badge b-pink">In-kind</span>' : (s === 'IA' || s === 'IC') ? '<span class="badge b-purple">Committee cash</span>' : '<span class="badge b-blue">Cash</span>';
@@ -76,6 +77,16 @@
     return [filerTypeBadge(f), partyBadge(f.party), esc(officeText(f)), esc(place(f.city, f.state))].filter(Boolean).join(' · ');
   }
   function donorHref(d) { return d.entity_id ? `/entity/${encodeURIComponent(d.entity_id)}` : `/donor/${d.donor_id}`; }
+  // Intermediary committees in a money flow get a fixed hue each, in this order; any beyond the fourth share grey.
+  const FLOW_COLORS = ['blue', 'pink', 'green', 'purple'];
+  const flowColor = (i) => FLOW_COLORS[i] || 'gray';
+  function flowBar(parts, max, colorOf) {
+    // parts: [{id, total}], drawn left to right with a 2px gap; the whole bar is sized against max.
+    const total = parts.reduce((t, p) => t + p.total, 0);
+    if (!(total > 0)) return '';
+    const width = Math.max(2, 100 * total / (max || total));
+    return `<div class="fbar" style="width:${width}%" role="img" aria-label="${esc(parts.map((p) => `${colorOf.name(p.id)}: ${money(p.total)}`).join('; '))}">${parts.map((p) => `<i class="c-${colorOf.color(p.id)}" style="flex:${p.total} 0 0" title="${esc(colorOf.name(p.id))}: ${money(p.total)}"></i>`).join('')}</div>`;
+  }
   function yearPills(years, current, base, extra = '') {
     const ys = years.map((y) => y.eyear ?? y);
     const shown = ys.length > 8 ? ys.slice(-8) : ys;
@@ -183,6 +194,7 @@
       else if ((m = p.match(/^\/donor\/(\d+)$/))) await donorPage(`/donor/${m[1]}`, q);
       else if ((m = p.match(/^\/entity\/([^/]+)$/))) await donorPage(`/entity/${m[1]}`, q);
       else main.innerHTML = '<h1>Not found</h1>';
+      if (url.hash) { const el = document.getElementById(url.hash.slice(1)); if (el) el.scrollIntoView(); }
     } catch (e) {
       main.innerHTML = `<div class="card card-body"><h2>Something went wrong</h2><p class="muted">${esc(e.message)}</p></div>`;
     }
@@ -332,6 +344,8 @@
     const entityById = Object.fromEntries((data.entities || []).map((e) => [e.entity_id, e]));
     const topDonor = data.top_donors[0];
     const topShare = topDonor ? pct(topDonor.total, s.total) : 0;
+    const ad = data.as_donor || { links: [], recipients: [], total: 0, n_recipients: 0 };
+    const linkSources = [...new Set(ad.links.map((l) => l.source))];
     const cycleLabel = (c) => label('cycle', String(c), `Cycle ${c}`);
 
     main.innerHTML = `
@@ -354,6 +368,7 @@
         <div class="kpi"><div class="l">From committees</div><div class="v">${moneyShort(s.cash_committee)}</div><div class="s">${fmtPct(pct(s.cash_committee, s.total))} of total, cash</div></div>
         <div class="kpi"><div class="l">Distinct donors</div><div class="v">${int(s.n_donors)}</div><div class="s">${int(s.n_small)} gave $250 or less</div></div>
         <div class="kpi"><div class="l">Spent</div><div class="v">${moneyShort(s.expenses)}</div><div class="s">reported expenditures</div></div>
+        ${ad.total > 0 ? `<div class="kpi"><div class="l">Gave to other committees</div><div class="v"><a href="#gave-to">${moneyShort(ad.total)}</a></div><div class="s">to ${int(ad.n_recipients)} recipient${ad.n_recipients == 1 ? '' : 's'}, as they reported</div></div>` : ''}
       </section>
 
       <section class="grid-2">
@@ -365,17 +380,25 @@
         <div class="card card-body" style="display:flex;flex-direction:column;gap:12px">
           <h2>Where the money came from</h2>
           ${sourceChart(s)}
-          ${topDonor && topShare >= 25 ? `<div class="callout callout-pink"><strong>${esc(niceName(topDonor.name))} supplied ${fmtPct(topShare)} of this money.</strong> ${topDonor.inkind > 0 ? `${moneyShort(topDonor.inkind)} of it was in-kind. ` : ''}<a href="${topDonor.kind === 'committee' ? '/search?q=' + encodeURIComponent(topDonor.name) : donorHref(topDonor)}" data-link>${topDonor.kind === 'committee' ? 'Find that committee’s own filings →' : 'See everything they gave →'}</a></div>` : ''}
+          ${topDonor && topShare >= 25 ? `<div class="callout callout-pink"><strong>${esc(niceName(topDonor.name))} supplied ${fmtPct(topShare)} of this money.</strong> ${topDonor.inkind > 0 ? `${moneyShort(topDonor.inkind)} of it was in-kind. ` : ''}<a href="${topDonor.link_filer_id ? '/filer/' + encodeURIComponent(topDonor.link_filer_id) + '?year=' + year : topDonor.kind === 'committee' ? '/search?q=' + encodeURIComponent(topDonor.name) : donorHref(topDonor)}" data-link>${topDonor.link_filer_id ? 'Where did that committee’s money come from? →' : topDonor.kind === 'committee' ? 'Find that committee’s own filings →' : 'See everything they gave →'}</a></div>` : ''}
         </div>
       </section>
 
       <section class="card" id="donors">
         <div class="card-head"><h2>Top donors, ${yearLabel}</h2><span class="muted small">Grouped by name, city and state as filed</span></div>
         <div class="table-wrap"><table class="rows"><thead><tr><th>Donor</th><th>Kind</th><th class="num">Gifts</th><th class="num">Total</th><th>Share</th></tr></thead><tbody>
-          ${data.top_donors.map((d) => `<tr><td class="t"><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}${d.inkind > 0 ? ` · <span class="badge b-pink">${d.inkind >= d.total * 0.99 ? 'in-kind' : 'partly in-kind'}</span>` : ''}${d.entity_id ? ` · <span class="badge b-gray">${d.n_keys > 1 ? d.n_keys + ' spellings merged' : 'merged'}</span>` : ''}<span class="m-only"> · ${kindBadge(d.kind)} · ${int(d.n)} gift${d.n == 1 ? '' : 's'} · ${fmtPct(pct(d.total, s.total))} of total</span></div></td><td class="m-hide">${kindBadge(d.kind)}</td><td class="num m-hide">${int(d.n)}</td><td class="num strong a">${money(d.total)}</td><td class="m-hide"><div class="share"><i style="width:${Math.max(2, pct(d.total, s.total))}%"></i><span class="muted small">${fmtPct(pct(d.total, s.total))}</span></div></td></tr>`).join('') || '<tr><td class="muted" colspan="5">No contributions in this window.</td></tr>'}
+          ${data.top_donors.map((d) => `<tr><td class="t"><a class="name" href="${donorHref(d)}" data-link>${esc(niceName(d.name))}</a><div class="sub">${esc([place(d.city, d.state), d.employer ? niceName(d.employer) : ''].filter(Boolean).join(' · '))}${d.inkind > 0 ? ` · <span class="badge b-pink">${d.inkind >= d.total * 0.99 ? 'in-kind' : 'partly in-kind'}</span>` : ''}${d.entity_id ? ` · <span class="badge b-gray">${d.n_keys > 1 ? d.n_keys + ' spellings merged' : 'merged'}</span>` : ''}${d.link_filer_id ? ` · <a href="/filer/${encodeURIComponent(d.link_filer_id)}?year=${year}" data-link>its own filings →</a>` : ''}<span class="m-only"> · ${kindBadge(d.kind)} · ${int(d.n)} gift${d.n == 1 ? '' : 's'} · ${fmtPct(pct(d.total, s.total))} of total</span></div></td><td class="m-hide">${kindBadge(d.kind)}</td><td class="num m-hide">${int(d.n)}</td><td class="num strong a">${money(d.total)}</td><td class="m-hide"><div class="share"><i style="width:${Math.max(2, pct(d.total, s.total))}%"></i><span class="muted small">${fmtPct(pct(d.total, s.total))}</span></div></td></tr>`).join('') || '<tr><td class="muted" colspan="5">No contributions in this window.</td></tr>'}
         </tbody></table></div>
         <div class="card-foot"><span>${int(s.n_donors)} donors in total.</span><a href="#contributions">Browse every contribution ↓</a></div>
       </section>
+
+      ${ad.links.length ? `<section class="card" id="gave-to">
+        <div class="card-head"><h2>Where the money went, ${yearLabel}</h2><span class="muted small">Candidates and committees that reported receiving money from ${esc(niceName(f.name))}</span></div>
+        <div class="table-wrap"><table class="rows"><thead><tr><th>Recipient</th><th>Type</th><th class="num">Gifts</th><th class="num">Total</th><th>Share</th></tr></thead><tbody>
+          ${ad.recipients.map((r) => `<tr><td class="t"><a class="name" href="/filer/${encodeURIComponent(r.filer_id)}?year=${year}" data-link>${esc(niceName(r.name))}</a><div class="sub">${esc([officeText(r), place(r.city, r.state), year === 'all' && r.first_year ? (r.first_year === r.last_year ? r.first_year : r.first_year + '–' + r.last_year) : ''].filter(Boolean).join(' · '))}<span class="m-only"> · ${filerTypeBadge(r)} ${partyBadge(r.party)} · ${int(r.n)} gift${r.n == 1 ? '' : 's'} · ${fmtPct(pct(r.total, ad.total))}</span></div></td><td class="m-hide">${filerTypeBadge(r)} ${partyBadge(r.party)}</td><td class="num m-hide">${int(r.n)}</td><td class="num strong a">${money(r.total)}</td><td class="m-hide"><div class="share"><i style="width:${Math.max(2, pct(r.total, ad.total))}%"></i><span class="muted small">${fmtPct(pct(r.total, ad.total))}</span></div></td></tr>`).join('') || '<tr><td class="muted" colspan="5">No committee reported receiving money from this filer in this window.</td></tr>'}
+        </tbody></table></div>
+        <div class="card-foot"><span>${ad.n_recipients > ad.recipients.length ? `Top ${ad.recipients.length} of ${int(ad.n_recipients)} recipients. ` : ''}These are the recipients’ own reports, which can differ from the payments this committee itself reported under <a href="#payees">largest payees</a>. On their reports this committee is named ${ad.links.length === 1 ? 'as' : `${ad.links.length} ways:`} ${ad.links.slice(0, 6).map((l) => `<a href="/donor/${l.donor_id}?merged=0" data-link>${esc(l.name)}</a>${l.city ? ` <span class="muted">(${esc(place(l.city, l.state))})</span>` : ''}`).join(', ')}${ad.links.length > 6 ? ` and ${ad.links.length - 6} more` : ''}. ${linkSources.includes('name') ? 'Names were matched to this filer exactly as spelled; ' : 'Each name was linked to this filer by a reviewed rule; '}${correctionLink(`Committee link: ${f.name} (${f.filer_id})`, `Filer: ${f.filer_id} ${f.name}\nLinked donor keys:\n${ad.links.map((l) => l.donor_key).join('\n')}\n\nWhich link is wrong, or which spelling is missing, and what is the evidence?`) || 'see the cleanup rules to propose a change'}.</span></div>
+      </section>` : ''}
 
       <section class="card" id="contributions">
         <div class="card-head"><h2>Contributions, ${yearLabel}</h2>
@@ -390,7 +413,7 @@
 
       <section class="grid-2">
         <div class="card">
-          <div class="card-head"><h2>Largest payees, ${yearLabel}</h2><a href="#" id="expenses-link">Browse expenses</a></div>
+          <div class="card-head" id="payees"><h2>Largest payees, ${yearLabel}</h2><a href="#" id="expenses-link">Browse expenses</a></div>
           <div class="table-wrap"><table class="rows"><thead><tr><th>Payee</th><th class="num">Payments</th><th class="num">Total</th></tr></thead><tbody>
             ${data.payees.map((p) => `<tr><td class="t"><span class="strong">${esc(niceName(p.payee))}</span><div class="sub">${esc(place(p.city, p.state))}<span class="m-only"> · ${int(p.n)} payment${p.n == 1 ? '' : 's'}</span></div></td><td class="num m-hide">${int(p.n)}</td><td class="num strong a">${money(p.total)}</td></tr>`).join('') || '<tr><td class="muted" colspan="3">No expenses in this window.</td></tr>'}
           </tbody></table></div>
@@ -457,6 +480,12 @@
     const keyList = data.members.map((m) => m.donor_key).join('\n');
     const issueBody = `Donor key(s):\n${keyList}\n${entity ? `Entity: ${entity.entity_id} (${entity.name})\n` : ''}\nWhat should change, and what is the evidence?`;
     const cycleLabel = (c) => label('cycle', String(c), `Cycle ${c}`);
+    const filers = data.filers || [];
+    const onward = data.onward || { via: [], recipients: [] };
+    const viaIndex = Object.fromEntries(onward.via.map((v, i) => [v.filer_id, i]));
+    const viaColor = { color: (id) => flowColor(viaIndex[id]), name: (id) => { const v = onward.via[viaIndex[id]]; return v ? niceName(v.name) : ''; } };
+    const onwardMax = Math.max(...onward.recipients.map((r) => r.total), 1);
+    const firstCommittee = data.recipients.find(isCommittee);
 
     main.innerHTML = `
       <nav class="crumbs" aria-label="Breadcrumb"><a href="/" data-link>Home</a><span>/</span><a href="/donors" data-link>Donors</a><span>/</span><span>${esc(name)}</span></nav>
@@ -468,6 +497,7 @@
           ${entity ? `<div class="notice"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M21 3l-7 7M8 21H3v-5M3 21l7-7"/></svg><span style="flex:1">This page combines ${data.members.length} filed spellings under a reviewed correction: ${data.members.map((m) => `<a href="/donor/${m.donor_id}?merged=0&year=${year}" data-link>${esc(m.name)}</a> <span class="muted small">(${esc(place(m.city, m.state))})</span>`).join(', ')}. ${entity.note ? esc(entity.note) + '. ' : ''}${correctionLink(`Merge ${entity.entity_id}: ${entity.name}`, issueBody) || ''}</span></div>` :
           d.kind_source === 'heuristic' ? `<p class="muted small">Labeled “${d.kind}” by a name heuristic. ${correctionLink(`Reclassify donor: ${d.name}`, issueBody)}</p>` :
           `<p class="muted small">${correctionLink(`Correction for donor: ${d.name}`, issueBody)}</p>`}
+          ${filers.map((f) => `<div class="notice notice-flow"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16M14 6l6 6-6 6"/></svg><span style="flex:1">This committee files its own reports as <a href="/filer/${encodeURIComponent(f.filer_id)}?year=${year}" data-link><strong>${esc(niceName(f.name))}</strong></a> <span class="muted small">(filer ${esc(f.filer_id)}${f.first_year ? `, ${f.first_year}–${f.last_year}` : ''})</span>: raised ${moneyShort(f.total_all)}, spent ${moneyShort(f.expenses)}. <a href="/filer/${encodeURIComponent(f.filer_id)}?year=${year}#gave-to" data-link>See where its money came from and went →</a> <span class="muted small">${f.source === 'rule' ? 'Linked by a reviewed rule.' : 'Matched by exact name and state.'} ${correctionLink(`Committee link: ${d.name} → ${f.filer_id}`, `${issueBody}\n\nLinked to filer ${f.filer_id} (${f.name}).`)}</span></span></div>`).join('')}
         </div>
         <div class="tools">${yearPills(data.years, year, base)}</div>
       </div>
@@ -479,9 +509,28 @@
         ${s.rank ? `<div class="kpi"><div class="l">Rank among individuals</div><div class="v">#${int(s.rank)}</div><div class="s">by total given, ${yearLabel}</div></div>` : ''}
       </section>
 
+      ${onward.via.length ? `<section class="card" id="flow">
+        <div class="card-head"><h2>Follow the money, ${yearLabel}</h2><span class="muted small">Committees ${esc(name)} funded, and where those committees sent money</span></div>
+        <div class="flow">
+          <div class="flow-step">
+            <div class="flow-title"><span class="flow-num">1</span><h3>${esc(name)} gave to ${onward.via.length === 1 ? 'this committee' : `these ${onward.via.length} committees`}</h3></div>
+            <ul class="flow-via">${onward.via.map((v, i) => `<li><span class="sw c-${flowColor(i)}"></span><div class="t"><a class="name" href="/filer/${encodeURIComponent(v.filer_id)}?year=${year}" data-link>${esc(niceName(v.name))}</a><div class="sub">received <strong>${moneyShort(v.received)}</strong> from ${esc(name)} · passed on <strong>${moneyShort(v.passed_on)}</strong> to ${int(v.n_recipients)} recipient${v.n_recipients == 1 ? '' : 's'}</div></div></li>`).join('')}</ul>
+            ${data.recipients.filter(isCommittee).length > onward.via.length ? `<p class="muted small">${onward.via.length === 8 ? `The ${onward.via.length} committees that received the most from ${esc(name)}, among those` : 'Only committees'} whose name appears as a donor on other reports${onward.via.length === 8 ? '' : ' can be followed further'}. <a href="#recipients">All recipients ↓</a></p>` : ''}
+          </div>
+          <div class="flow-step">
+            <div class="flow-title"><span class="flow-num">2</span><h3>${onward.via.length === 1 ? 'That committee' : 'Those committees'} gave to</h3></div>
+            <div class="table-wrap"><table class="rows flow-table"><tbody>
+              ${onward.recipients.map((r) => `<tr><td class="t"><a class="name" href="/filer/${encodeURIComponent(r.filer_id)}?year=${year}" data-link>${esc(niceName(r.name))}</a><div class="sub">${[filerTypeBadge(r), partyBadge(r.party), esc(officeText(r)), esc(place(r.city, r.state))].filter(Boolean).join(' · ')}${r.via.length > 1 ? ` · via ${r.via.length} of them` : onward.via.length > 1 ? ` · via ${esc(viaColor.name(r.via[0].filer_id))}` : ''}</div>${flowBar(r.via.map((v) => ({ id: v.filer_id, total: v.total })), onwardMax, viaColor)}</td><td class="num strong a">${money(r.total)}</td></tr>`).join('')}
+            </tbody></table></div>
+            ${onward.n_recipients > onward.recipients.length ? `<p class="muted small">Top ${onward.recipients.length} of ${int(onward.n_recipients)} recipients${onward.truncated ? ' counted so far' : ''}. Each committee’s page lists all of them.</p>` : ''}
+          </div>
+        </div>
+        <div class="card-foot"><span>Money is pooled: what a committee passed on came from all of its donors, not only ${esc(name)}, and in ${year === 'all' ? 'the same years' : year} only. Amounts are what each recipient reported receiving. A committee is matched to its own filings by exact name and state, or by a reviewed rule. <a href="/about#following" data-link>How this works</a></span></div>
+      </section>` : ''}
+
       <section class="grid-2">
         <div style="display:flex;flex-direction:column;gap:20px">
-          <div class="card"><div class="card-head"><h2>Recipients, ${yearLabel}</h2></div>
+          <div class="card" id="recipients"><div class="card-head"><h2>Recipients, ${yearLabel}</h2></div>
             <div class="table-wrap"><table class="rows"><thead><tr><th>Recipient</th><th>Type</th><th class="num">Gifts</th><th class="num">Total</th></tr></thead><tbody>
               ${data.recipients.map((f) => `<tr><td class="t"><a class="name" href="/filer/${encodeURIComponent(f.filer_id)}?year=${year}" data-link>${esc(niceName(f.name))}</a><div class="sub">${esc([officeText(f), place(f.city, f.state), year === 'all' && f.first_year ? (f.first_year === f.last_year ? f.first_year : f.first_year + '–' + f.last_year) : ''].filter(Boolean).join(' · '))}<span class="m-only"> · ${filerTypeBadge(f)} ${partyBadge(f.party)} · ${int(f.n)} gift${f.n == 1 ? '' : 's'}</span></div></td><td class="m-hide">${filerTypeBadge(f)} ${partyBadge(f.party)}</td><td class="num m-hide">${int(f.n)}</td><td class="num strong a">${money(f.total)}${f.inkind > 0 ? `<div class="sub">${moneyShort(f.inkind)} in-kind</div>` : ''}</td></tr>`).join('') || '<tr><td class="muted" colspan="4">Nothing in this window.</td></tr>'}
             </tbody></table></div></div>
@@ -491,7 +540,7 @@
             </tbody></table></div></div>
         </div>
         <aside style="display:flex;flex-direction:column;gap:16px">
-          ${data.recipients.length && data.recipients[0].filer_type === '2' ? `<div class="card card-body" style="display:flex;flex-direction:column;gap:10px"><h2>Keep following the money</h2><p class="small">${esc(niceName(data.recipients[0].name))} passes money on to candidates and other committees.</p><a class="btn btn-primary" href="/filer/${encodeURIComponent(data.recipients[0].filer_id)}?year=${year}" data-link>What did ${esc(niceName(data.recipients[0].name))} do with it? →</a></div>` : ''}
+          ${!onward.via.length && firstCommittee ? `<div class="card card-body" style="display:flex;flex-direction:column;gap:10px"><h2>Keep following the money</h2><p class="small">${esc(niceName(firstCommittee.name))} is a committee, and committees pass money on. Its own filings list what it spent.</p><a class="btn btn-primary" href="/filer/${encodeURIComponent(firstCommittee.filer_id)}?year=${year}" data-link>What did ${esc(niceName(firstCommittee.name))} do with it? →</a></div>` : ''}
           ${employers.length ? `<div class="card card-body" style="display:flex;flex-direction:column;gap:8px"><h2>Same employer</h2><p class="small">Find other contributions where a committee listed ${employers.map((e) => `<a href="/search?q=${encodeURIComponent(e)}" data-link>${esc(e)}</a>`).join(' or ')} as the employer.</p></div>` : ''}
           <div class="card card-body" style="display:flex;flex-direction:column;gap:8px"><h2>Not in this data</h2><p class="small">Gifts to federal candidates and super PACs are filed with the FEC, not Pennsylvania. <a href="https://www.fec.gov/data/receipts/individual-contributions/?contributor_name=${encodeURIComponent(d.name)}" rel="noopener">Search this name on FEC.gov</a></p></div>
           <div class="card card-body" style="display:flex;flex-direction:column;gap:8px"><h2>Donor key${data.members.length > 1 ? 's' : ''}</h2>${data.members.map((m) => `<code class="small" style="word-break:break-all">${esc(m.donor_key)}</code>`).join('')}<p class="muted small">Used to propose a merge or reclassification in the cleanup files.</p></div>
@@ -513,6 +562,9 @@
         <h2>Who is a donor</h2>
         <p>The state assigns no IDs to donors. A donor here is a name, city and state exactly as filed, after uppercasing and removing punctuation. "Jeffrey Yass" in Bala Cynwyd and "Jeffery Yass" in Haverford are two donors until a reviewed rule says they are one person. <strong>Nothing is merged automatically.</strong> Merged pages say so and list every spelling they include.</p>
         <p>Whether a donor is a political committee comes from the form: Schedule I parts A and C are reserved for committees. Everything else is labeled individual or organization by a keyword heuristic, which the donor page discloses, or by an explicit rule.</p>
+        <h2 id="following">Following money between committees</h2>
+        <p>The state gives every filer an ID but gives donors none, so when a PAC appears as a contributor on another committee's report it is just a name. To follow money through a PAC, that name has to be tied to the PAC's own filer record. We do that in two ways, and each page says which applied: a <strong>reviewed rule</strong> in <code>cleanup/filer_links.csv</code>, or an <strong>exact match</strong> where the normalized name equals a name exactly one committee filer has used and the states agree. There is no fuzzy matching, and a rule can block an exact match that turns out to be wrong.</p>
+        <p>"Follow the money" on a donor's page then shows two steps: the committees the donor gave to, and what those committees gave onward in the same years, as reported by the recipients. Money inside a committee is pooled, so the second step is what the committee did with all of its money, not with one donor's dollars in particular.</p>
         <h2>Proposing a correction</h2>
         <p>Every donor and filer page has a "Suggest a correction" link that opens a prefilled issue${repo ? ` in the <a href="${esc(repo)}" rel="noopener">public repository</a>` : ''}. Corrections live in plain CSV files with a reason and evidence for each row. A continuous check validates every proposed change, and a maintainer reviews merges of people before they go live, because a wrong merge attributes money to the wrong person.</p>
         ${repo ? `<p><a class="btn btn-primary" href="${esc(repo)}/blob/main/cleanup/README.md" rel="noopener">Read the correction rules</a></p>` : ''}

@@ -9,7 +9,7 @@ Steps:
   1. Load every report row (filer_YYYY.txt) and decide which reports are current.
      A report is superseded when a later report exists for the same filer, year and cycle.
   2. Load contributions, expenses, debts and receipts, tagging each with is_current.
-  3. Apply cleanup/: lookups, entity merges, filer groups, reclassifications.
+  3. Apply cleanup/: lookups, entity merges, filer groups, reclassifications, committee-to-filer links.
   4. Build aggregates and full-text indexes.
 """
 import argparse
@@ -377,6 +377,9 @@ class Builder:
             upd.append((kind, did))
         db.executemany("UPDATE donor SET kind = ?, kind_source = 'heuristic' WHERE donor_id = ?", upd)
         db.commit()
+        # Which committee donors are filers themselves (needs the kinds above).
+        from links import build_filer_links
+        self.warnings.extend(build_filer_links(db, log))
 
     # ---- step 4: aggregates ------------------------------------------------
     def aggregate(self):

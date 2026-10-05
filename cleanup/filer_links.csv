@@ -1,0 +1,13 @@
+donor_key,filer_id,reason,evidence,submitted_by
+STUDENT S FIRST PAC|WYNNEWOOD|PA,2010165,"Students First PAC with a stray apostrophe; same Wynnewood address as the committee's own filings","Commonwealth Children's Choice Fund 2020 and 2021 reports list this spelling at 19096 Wynnewood; filer 2010165 files from Wynnewood",maintainer
+STUDENT FIRST PAC|WYNNEWOOD|PA,2010165,"Students First PAC with the plural dropped; same Wynnewood address","Recipient filings 2010 to 2022 at Wynnewood; filer 2010165 files from Wynnewood",maintainer
+STUDENT FIRST PAC|BALA CYNWYD|PA,2010165,"Students First PAC with the plural dropped, filed at Bala Cynwyd, where its treasurer and funder Susquehanna International Group are based","Recipient filings 2025 and 2026; filer 2010165 also appears as a donor under STUDENTS FIRST PAC|BALA CYNWYD|PA",maintainer
+STUDENTS FIRST|WYNNEWOOD|PA,2010165,"Students First PAC with PAC dropped; same Wynnewood address","Recipient filings 2012 to 2014 at Wynnewood",maintainer
+STUDENTS FIRST|BALA CYNWYD|PA,2010165,"Students First PAC with PAC dropped, filed at Bala Cynwyd like the committee's other donor spellings","Recipient filings 2010 to 2022",maintainer
+STUDENTS FIRST|WYNEWOOD|PA,2010165,"Students First PAC with PAC dropped and Wynnewood misspelled","Recipient filings 2014 to 2016",maintainer
+STUDENTS FIRST|HARRISBURG|PA,2010165,"Students First PAC with PAC dropped, filed at its Harrisburg mailing address, which other recipients also use for STUDENTS FIRST PAC|HARRISBURG|PA","Recipient filing 2014",maintainer
+STUDENTS FIRST PA|WYNNEWOOD|PA,2010165,"Students First PAC with PAC typed as PA; same Wynnewood address","Recipient filing 2010",maintainer
+STUDENTS FIRST PA|ARDMORE|PA,2010165,"Students First PAC with PAC typed as PA; Ardmore adjoins Wynnewood and shares its post office","Recipient filing 2012",maintainer
+STUDENT FIRST|WYNNEWOOD|PA,2010165,"Students First PAC with plural and PAC dropped; same Wynnewood address","Recipient filing 2019",maintainer
+STUDENTS FIRST PAC CK 1821|WYNNEWOOD|PA,2010165,"Students First PAC with a check number typed into the name; same Wynnewood address","Recipient filing 2014",maintainer
+COMMONWEALTH CHILDREN CHOICE FUND|HARRISBURG|PA,20190183,"Commonwealth Children's Choice Fund with the possessive dropped; already merged into entity E0002 and the committee files from Harrisburg","Dave Sunday for AG 2024 filings (filer 20230211); filer 20190183 is COMMONWEALTH CHILDRENS CHOICE FUND, Harrisburg",maintainer

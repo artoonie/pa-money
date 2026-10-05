@@ -201,10 +201,25 @@ async function filerPage(env, id, q) {
   const topDonorsQ = all(env, `
     SELECT MIN(d.donor_id) donor_id, COALESCE(MAX(e.name), MIN(d.name)) name, MIN(d.city) city, MIN(d.state) state, MIN(d.employer) employer,
            COALESCE(MAX(e.kind), MIN(d.kind)) kind, MIN(d.kind_source) kind_source, d.entity_id, COUNT(DISTINCT d.donor_id) n_keys,
-           SUM(fd.total) total, SUM(fd.inkind) inkind, SUM(fd.n) n
+           SUM(fd.total) total, SUM(fd.inkind) inkind, SUM(fd.n) n, MAX(l.filer_id) link_filer_id
     FROM filer_donor_year fd JOIN donor d ON d.donor_id = fd.donor_id LEFT JOIN entity e ON e.entity_id = d.entity_id
+    LEFT JOIN filer_link l ON l.donor_id = d.donor_id
     WHERE fd.filer_id IN (${ph(ids)}) ${w.clause.replace('eyear', 'fd.eyear')}
     GROUP BY COALESCE(d.entity_id, 'd' || d.donor_id) ORDER BY total DESC LIMIT 15`, P);
+  // This committee as a donor: the donor keys that are linked to it, and who reported receiving money from them.
+  const linksQ = all(env, `
+    SELECT d.donor_id, d.donor_key, d.name, d.city, d.state, d.total_all, d.entity_id, l.source, l.reason
+    FROM filer_link l JOIN donor d ON d.donor_id = l.donor_id WHERE l.filer_id IN (${ph(ids)}) ORDER BY d.total_all DESC`, ids);
+  const gaveToQ = all(env, `
+    SELECT f.filer_id, f.name, f.filer_type, f.office, f.district, f.party, f.city, f.state, f.group_id,
+           SUM(fd.total) total, SUM(fd.inkind) inkind, SUM(fd.n) n, MIN(fd.eyear) first_year, MAX(fd.eyear) last_year
+    FROM filer_link l JOIN filer_donor_year fd ON fd.donor_id = l.donor_id JOIN filer f ON f.filer_id = fd.filer_id
+    WHERE l.filer_id IN (${ph(ids)}) ${w.clause.replace('eyear', 'fd.eyear')}
+    GROUP BY f.filer_id ORDER BY total DESC LIMIT 15`, P);
+  const gaveAggQ = one(env, `
+    SELECT COALESCE(SUM(fd.total),0) total, COUNT(DISTINCT fd.filer_id) n_recipients, COALESCE(SUM(fd.n),0) n
+    FROM filer_link l JOIN filer_donor_year fd ON fd.donor_id = l.donor_id
+    WHERE l.filer_id IN (${ph(ids)}) ${w.clause.replace('eyear', 'fd.eyear')}`, P);
   const largestQ = all(env, `
     SELECT c.id, c.cf_id, c.filer_id, c.eyear, c.cycle, c.section, c.donor_id, c.contributor, c.city, c.state, c.employer, c.occupation,
            c.date, c.amount, c.description, r.submitted, r.amend
@@ -218,8 +233,8 @@ async function filerPage(env, id, q) {
   const reportsQ = all(env, `
     SELECT cf_id, filer_id, eyear, cycle, submitted, amend, terminate, beginning, monetary, inkind, is_current
     FROM report WHERE filer_id IN (${ph(ids)}) ${w.clause} ORDER BY eyear, cycle, submitted`, P);
-  const [summary, donorsAgg, months, topDonorsRows, largest, payees, reports, lk] =
-    await Promise.all([summaryQ, donorsAggQ, monthsQ, topDonorsQ, largestQ, payeesQ, reportsQ, lookups(env)]);
+  const [summary, donorsAgg, months, topDonorsRows, largest, payees, reports, links, gaveTo, gaveAgg, lk] =
+    await Promise.all([summaryQ, donorsAggQ, monthsQ, topDonorsQ, largestQ, payeesQ, reportsQ, linksQ, gaveToQ, gaveAggQ, lookups(env)]);
 
   let timeline;
   if (w.year === 'all') {
@@ -243,6 +258,7 @@ async function filerPage(env, id, q) {
     filer, group, combine, ids, years, year: w.year,
     summary: { ...summary, ...donorsAgg },
     timeline, top_donors: topDonorsRows, largest, payees, reports, entities,
+    as_donor: { links, recipients: gaveTo, ...gaveAgg },
     lookups: lk,
   };
 }
@@ -362,8 +378,15 @@ async function donorView(env, members, entity, q, focus = null) {
     FROM contribution c JOIN filer f ON f.filer_id = c.filer_id
     WHERE c.donor_id IN (${ph(ids)}) AND c.is_current = 1 ${w.clause.replace('eyear', 'c.eyear')}
     ORDER BY c.amount DESC, c.date DESC LIMIT 200`, P);
-  const [summary, recipients, contributions, lk] = await Promise.all([summaryQ, recipientsQ, contributionsQ, lookups(env)]);
+  // If this donor is a committee that files its own reports, point at that filer record.
+  const filersQ = all(env, `
+    SELECT f.filer_id, f.name, f.filer_type, f.office, f.party, f.city, f.state, f.total_all, f.first_year, f.last_year, f.group_id,
+           MIN(l.source) source, COUNT(*) n_keys,
+           (SELECT COALESCE(SUM(expenses),0) FROM filer_year y WHERE y.filer_id = f.filer_id) expenses
+    FROM filer_link l JOIN filer f ON f.filer_id = l.filer_id WHERE l.donor_id IN (${ph(ids)}) GROUP BY f.filer_id ORDER BY f.total_all DESC`, ids);
+  const [summary, recipients, contributions, filers, lk] = await Promise.all([summaryQ, recipientsQ, contributionsQ, filersQ, lookups(env)]);
   const largest = contributions.find((c) => !c.flag) || null;
+  const onward = await onwardFlows(env, recipients, w, filers.map((f) => f.filer_id));
   let rank = null;
   if ((entity ? entity.kind : members[0].kind) === 'individual') {
     const r = await one(env, `SELECT MIN(rank) rank FROM donor_rank WHERE eyear = ? AND kind = 'individual' AND donor_id IN (${ph(ids)})`,
@@ -373,7 +396,56 @@ async function donorView(env, members, entity, q, focus = null) {
   return {
     donor: focus || members[0], entity, members, ids, years, year: w.year,
     summary: { ...summary, n_recipients: recipients.length, largest, rank },
-    recipients, contributions, lookups: lk,
+    recipients, contributions, filers, onward, lookups: lk,
+  };
+}
+
+// Second hop: for the committees this donor gave to that also appear as donors on other reports (filer_link),
+// what did those committees pass on, in the same year window? Returns the intermediaries ("via") and the
+// merged list of their recipients, so two PACs funding the same candidate show up as one row.
+// Amounts are each recipient's own reports; a committee's onward giving includes money from all its donors.
+async function onwardFlows(env, recipients, w, selfIds) {
+  const VIA_MAX = 8, ROWS_MAX = 800;
+  // Anything that is not a candidate's own record or a lobbyist is a committee; a few committees have no type code.
+  const via = recipients.filter((r) => !['1', '3'].includes(String(r.filer_type || '')) && !selfIds.includes(r.filer_id)).slice(0, VIA_MAX);
+  if (!via.length) return { via: [], recipients: [], total: 0, n_recipients: 0 };
+  const viaIds = via.map((r) => r.filer_id);
+  const P = [...viaIds, ...w.params];
+  const linked = await all(env, `SELECT DISTINCT filer_id FROM filer_link WHERE filer_id IN (${ph(viaIds)})`, viaIds);
+  if (!linked.length) return { via: [], recipients: [], total: 0, n_recipients: 0 };
+  const [totals, rows] = await Promise.all([
+    all(env, `
+      SELECT l.filer_id via_id, COALESCE(SUM(fd.total),0) total, COUNT(DISTINCT fd.filer_id) n_recipients
+      FROM filer_link l JOIN filer_donor_year fd ON fd.donor_id = l.donor_id
+      WHERE l.filer_id IN (${ph(viaIds)}) ${w.clause.replace('eyear', 'fd.eyear')} GROUP BY l.filer_id`, P),
+    all(env, `
+      SELECT l.filer_id via_id, fd.filer_id, f.name, f.filer_type, f.office, f.district, f.party, f.city, f.state, SUM(fd.total) total, SUM(fd.n) n
+      FROM filer_link l JOIN filer_donor_year fd ON fd.donor_id = l.donor_id JOIN filer f ON f.filer_id = fd.filer_id
+      WHERE l.filer_id IN (${ph(viaIds)}) ${w.clause.replace('eyear', 'fd.eyear')}
+      GROUP BY l.filer_id, fd.filer_id ORDER BY total DESC LIMIT ?`, [...P, ROWS_MAX]),
+  ]);
+  const totalBy = Object.fromEntries(totals.map((t) => [t.via_id, t]));
+  const viaOut = via.filter((r) => totalBy[r.filer_id]).map((r) => ({
+    filer_id: r.filer_id, name: r.name, city: r.city, state: r.state, received: r.total,
+    passed_on: totalBy[r.filer_id].total, n_recipients: totalBy[r.filer_id].n_recipients,
+  }));
+  const merged = new Map();
+  for (const r of rows) {
+    let m = merged.get(r.filer_id);
+    if (!m) {
+      m = { filer_id: r.filer_id, name: r.name, filer_type: r.filer_type, office: r.office, district: r.district, party: r.party, city: r.city, state: r.state, total: 0, n: 0, via: [] };
+      merged.set(r.filer_id, m);
+    }
+    m.total += r.total; m.n += r.n;
+    m.via.push({ filer_id: r.via_id, total: r.total });
+  }
+  const list = [...merged.values()].sort((a, b) => b.total - a.total);
+  return {
+    via: viaOut,
+    recipients: list.slice(0, 15),
+    total: viaOut.reduce((s, v) => s + v.passed_on, 0),
+    n_recipients: list.length,
+    truncated: rows.length === ROWS_MAX,
   };
 }
 

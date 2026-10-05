@@ -82,9 +82,10 @@ done:
   `web/`.
 - **refresh-data.yml** downloads the exports, rebuilds the database, and loads
   it into D1 on the first of each month, or on demand from the Actions tab.
-  Cleanup rules are applied at build time, so run it by hand after merging a
-  correction you want on the site right away. Trigger it once with a short
-  year range first to measure how long the D1 load takes.
+  Trigger it once with a short year range first to measure how long the D1 load
+  takes. For a cleanup-only change that should reach the site right away, run
+  `python3 pipeline/apply_cleanup.py && scripts/deploy-cleanup.sh` from a
+  machine with the current build; it pushes only the small cleanup tables.
 
 Both need two repository secrets, set under Settings → Secrets and variables →
 Actions:
@@ -112,6 +113,12 @@ wrangler's local state are ignored by git.
   committees by definition of the form. Everything else is labeled by a small
   keyword heuristic (PAC, Fund, LLC, Union, and so on) or by an explicit rule in
   `cleanup/reclassify.csv`. The source of each label is stored.
+- **Committee links.** A committee that files its own reports also appears by
+  name as a contributor on other committees' reports. The build links the two
+  when the normalized name matches exactly one committee filer and the states
+  agree, or when `cleanup/filer_links.csv` says so. Donor pages use the links to
+  show two steps of "follow the money": the committees a donor funded, and what
+  those committees gave onward, as reported by the recipients.
 - **Schedules and cycles.** The export does not document its codes. The labels
   in `cleanup/lookups/` were derived from form DSEB-502 and from filing dates in
   the data, and each one notes how confident we are.

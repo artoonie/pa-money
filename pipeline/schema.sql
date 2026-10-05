@@ -206,3 +206,17 @@ CREATE TABLE donor_rank (
   n_recipients INTEGER NOT NULL,
   PRIMARY KEY (eyear, kind, rank)
 );
+
+-- A committee that files its own reports also appears, by name, as a contributor on other committees' reports.
+-- filer_link ties such a donor key to the filer record so money can be followed from donor to committee to onward recipients.
+-- source 'name': the normalized donor name equals a name exactly one committee filer (not a candidate or lobbyist record) has used, and the states agree.
+-- source 'rule': a reviewed row in cleanup/filer_links.csv.
+CREATE TABLE filer_link (
+  donor_id     INTEGER PRIMARY KEY,
+  filer_id     TEXT NOT NULL,
+  source       TEXT NOT NULL,
+  reason       TEXT,
+  evidence     TEXT,
+  submitted_by TEXT
+);
+CREATE INDEX filer_link_filer ON filer_link (filer_id);

@@ -56,6 +56,7 @@ def main():
     merges = read("donor_merges.csv", ["donor_key", "entity_id", "reason", "evidence", "submitted_by"])
     groups = read("filer_groups.csv", ["filer_id", "group_id", "group_name", "reason"])
     rules = read("reclassify.csv", ["name_normalized", "kind", "reason"])
+    links = read("filer_links.csv", ["donor_key", "filer_id", "reason", "evidence", "submitted_by"])
     lookups = {k: read(os.path.join("lookups", f), ["code", "label", "note"]) for k, f in LOOKUP_FILES.items()}
 
     ids = set()
@@ -117,6 +118,19 @@ def main():
         if not r["reason"]:
             err("reclassify.csv", r["_line"], "reason is required")
 
+    seen_links = {}
+    for l in links:
+        k = l["donor_key"]
+        if not KEY_RE.match(k):
+            err("filer_links.csv", l["_line"], f"bad donor_key {k!r}: must be NAME|CITY|ST, uppercase, no punctuation")
+        if k in seen_links:
+            err("filer_links.csv", l["_line"], f"donor_key already linked on line {seen_links[k]}")
+        seen_links[k] = l["_line"]
+        if l["filer_id"] and not re.match(r"^[A-Za-z0-9]+$", l["filer_id"]):
+            err("filer_links.csv", l["_line"], f"bad filer_id {l['filer_id']!r}")
+        if len(l["reason"]) < 10:
+            err("filer_links.csv", l["_line"], "reason is required (at least 10 characters); an empty filer_id blocks the automatic name match")
+
     for kind, rows in lookups.items():
         codes = set()
         for row in rows:
@@ -134,13 +148,18 @@ def main():
         for g in groups:
             if not db.execute("SELECT 1 FROM filer WHERE filer_id = ?", (g["filer_id"],)).fetchone():
                 print(f"note: filer_groups.csv:{g['_line']}: filer not in the built database: {g['filer_id']}")
+        for l in links:
+            if not db.execute("SELECT 1 FROM donor WHERE donor_key = ?", (l["donor_key"],)).fetchone():
+                print(f"note: filer_links.csv:{l['_line']}: key not in the built database: {l['donor_key']}")
+            if l["filer_id"] and not db.execute("SELECT 1 FROM filer WHERE filer_id = ?", (l["filer_id"],)).fetchone():
+                err("filer_links.csv", l["_line"], f"filer not in the built database: {l['filer_id']}")
         print("checked keys against data/pa.sqlite")
 
     if errors:
         print("\n".join(errors))
         print(f"\n{len(errors)} error(s)")
         sys.exit(1)
-    print(f"ok: {len(entities)} entities, {len(merges)} merges, {len(groups)} group rows, {len(rules)} rules, "
+    print(f"ok: {len(entities)} entities, {len(merges)} merges, {len(groups)} group rows, {len(rules)} rules, {len(links)} filer links, "
           + ", ".join(f"{len(v)} {LOOKUP_FILES[k][:-4]}" for k, v in lookups.items()))
 
 
