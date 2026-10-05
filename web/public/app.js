@@ -89,24 +89,26 @@
   }
   // Where money stops. 'candidate' is a candidate's own record (filerTypeBadge already says so).
   function endpointBadge(r) {
-    return { pass: '<span class="badge b-blue" title="Other committees reported receiving a fifth or more of what this committee raised">Passes money on</span>',
-      spends: '<span class="badge b-green" title="Little of what it raised was reported received by other committees: it spent the money itself">Endpoint</span>',
-      unlinked: '<span class="badge b-green" title="This committee does not appear by name as a donor on any other report, so the money stops here as far as the filings show">Endpoint</span>' }[r.endpoint] || '';
+    return { pass: '<span class="badge b-blue" title="Other committees reported getting at least a fifth of what this committee raised, so you can keep following its money">Passes money on</span>',
+      spends: '<span class="badge b-green" title="This committee spent nearly all of its money itself rather than giving it to other committees, so the money stops here">Spends it</span>',
+      unlinked: '<span class="badge b-green" title="No other committee reports getting money from this one, so the money stops here as far as the filings show">Spends it</span>' }[r.endpoint] || '';
   }
   // A trail is the chain of committees from the root to one endpoint, with the amount reported on each hop.
   function trailHtml(rootName, path, year) {
     const mids = path.slice(0, -1);
-    if (!mids.length) return `<span class="trail"><span class="tn">${esc(rootName)}</span> <span class="ta">→ directly →</span></span>`;
+    if (!mids.length) return `<span class="trail"><span class="tn">${esc(rootName)}</span> <span class="ta">→ gave directly to →</span></span>`;
     return `<span class="trail"><span class="tn">${esc(rootName)}</span>${mids.map((n) => ` <span class="ta">→ ${moneyShort(n.amount)} →</span> <a href="/filer/${encodeURIComponent(n.filer_id)}?year=${year}" data-link>${esc(niceName(n.name))}</a>`).join('')} <span class="ta">→ ${moneyShort(path[path.length - 1].amount)} →</span></span>`;
   }
+  const flowIntro = () => `<div class="card-body flow-intro"><p><strong>Money is hard to follow.</strong> People give to PACs, PACs give to other PACs, and eventually a candidate’s campaign gets it. Here we follow the money by tracing each transfer the recipients themselves reported, committee to committee, until it reaches a campaign or a committee that spends it. Every stop on the path is a link you can open.</p></div>`;
   function trailsCard(trails, rootName, year, yearLabel) {
     if (!trails || !trails.some((t) => t.hops >= 2)) return '';
     return `<section class="card" id="trails">
-      <div class="card-head"><h2>Where the money ended up, ${yearLabel}</h2><span class="muted small">Endpoints reached within four steps, ranked by the weakest hop on the trail</span></div>
-      <div class="table-wrap"><table class="rows"><thead><tr><th>Endpoint and trail</th><th class="num">Last gift</th></tr></thead><tbody>
-        ${trails.map((t) => { const e = t.endpoint; return `<tr><td class="t"><a class="name" href="/filer/${encodeURIComponent(e.filer_id)}?year=${year}" data-link>${esc(niceName(e.name))}</a> ${filerTypeBadge(e)} ${partyBadge(e.party)} ${endpointBadge(e)}<div class="sub">${esc([officeText(e), place(e.city, e.state)].filter(Boolean).join(' · '))}</div><div class="sub">${trailHtml(rootName, t.path, year)} <span class="tn">${esc(niceName(e.name))}</span></div></td><td class="num strong a">${money(t.amount)}<div class="sub">${t.hops === 1 ? 'direct' : `${t.hops} steps`}</div></td></tr>`; }).join('')}
+      <div class="card-head"><h2>Where the money ended up, ${yearLabel}</h2><span class="muted small">The campaigns and committees this money reached, and the path it took to get there</span></div>
+      ${flowIntro()}
+      <div class="table-wrap"><table class="rows"><thead><tr><th>Who ended up with it, and how</th><th class="num">Amount they got</th></tr></thead><tbody>
+        ${trails.map((t) => { const e = t.endpoint; return `<tr><td class="t"><a class="name" href="/filer/${encodeURIComponent(e.filer_id)}?year=${year}" data-link>${esc(niceName(e.name))}</a> ${filerTypeBadge(e)} ${partyBadge(e.party)} ${endpointBadge(e)}<div class="sub">${esc([officeText(e), place(e.city, e.state)].filter(Boolean).join(' · '))}</div><div class="sub">${trailHtml(rootName, t.path, year)} <span class="tn">${esc(niceName(e.name))}</span></div></td><td class="num strong a">${money(t.amount)}<div class="sub">${t.hops === 1 ? 'given directly' : t.hops === 2 ? 'through 1 committee' : `through ${t.hops - 1} committees`}</div></td></tr>`; }).join('')}
       </tbody></table></div>
-      <div class="card-foot"><span>An endpoint is a candidate's committee or any committee that passed on less than a fifth of what it raised. Trails stop after four steps and skip small transfers (under $100K and under 5% of the giver's outflow, outside its top five). Amounts are what each recipient reported; money inside a committee is pooled, so a trail shows a route, not ${esc(rootName)}’s specific dollars. <a href="/about#following" data-link>How this works</a></span></div>
+      <div class="card-foot"><span>Each path follows reported transfers from one committee to the next, through up to three committees, and stops when the money reaches a campaign or a committee that spends it rather than passing it on. Only the main routes are shown; small transfers and side paths are left out. At every stop ${esc(rootName)}’s money was mixed with everyone else’s, so a path shows where that committee’s money went, not where these exact dollars went. <a href="/about#following" data-link>How this works</a></span></div>
     </section>`;
   }
   // Nested, expandable list of recipients. Pass-through rows get a button that loads their own recipients
@@ -123,7 +125,7 @@
       return `<div class="fl-item" data-id="${esc(r.filer_id)}">
         <div class="fl-row">
           <div class="fl-main"><a class="name" href="/filer/${encodeURIComponent(r.filer_id)}?year=${o.year}" data-link>${esc(niceName(r.name))}</a>
-            <div class="sub">${[filerTypeBadge(r), partyBadge(r.party), endpointBadge(r), esc(officeText(r)), esc(place(r.city, r.state)), o.viaLabel(r)].filter(Boolean).join(' · ')}${onTrail ? ' · <span class="badge b-pink" title="Money that came back to a committee earlier on this trail">already on this trail</span>' : dup ? ' · <span class="muted">also reached above</span>' : ''}</div>
+            <div class="sub">${[filerTypeBadge(r), partyBadge(r.party), endpointBadge(r), esc(officeText(r)), esc(place(r.city, r.state)), o.viaLabel(r)].filter(Boolean).join(' · ')}${onTrail ? ' · <span class="badge b-pink" title="This committee is already earlier on this path, so the money has come back around">already on this path</span>' : dup ? ' · <span class="muted">also listed above</span>' : ''}</div>
             ${flowBar(parts, o.max, colorOf)}</div>
           <div class="fl-amt">${money(r.total)}</div>
           ${canExpand ? `<button class="btn fl-x" type="button" data-id="${esc(r.filer_id)}" data-trail="${esc([...o.trail, r.filer_id].join(','))}" data-color="${esc(o.color(parts[0].id))}" data-total="${r.total}" aria-expanded="false">Where it went</button>` : ''}
@@ -150,7 +152,7 @@
         const color = btn.dataset.color;
         const parentTotal = Number(btn.dataset.total) || 1;
         const label = niceName(item.querySelector('.fl-main .name').textContent);
-        kids.innerHTML = `<div class="fl-kids-head">${esc(label)} passed on <strong>${moneyShort(d.total)}</strong> to ${int(d.n_recipients)} recipient${d.n_recipients == 1 ? '' : 's'}${d.recipients.length < d.n_recipients ? `, largest ${d.recipients.length} shown` : ''}</div>`
+        kids.innerHTML = `<div class="fl-kids-head">${esc(label)} gave <strong>${moneyShort(d.total)}</strong> to ${int(d.n_recipients)} campaign${d.n_recipients == 1 ? '' : 's'} and committee${d.n_recipients == 1 ? '' : 's'}${d.recipients.length < d.n_recipients ? `; the ${d.recipients.length} largest are shown` : ''}</div>`
           + (flowItems(d.recipients, { year, trail, seen, parent: btn.dataset.id, max: Math.max(parentTotal, ...d.recipients.map((r) => r.total)), color: () => color, name: () => label, viaLabel: () => '' })
           || '<div class="muted small" style="padding:8px 0">Nothing reported in this window.</div>');
         kids.dataset.loaded = '1';
@@ -585,20 +587,21 @@
       ${trailsCard(data.trails, name, year, yearLabel)}
 
       ${onward.via.length ? `<section class="card" id="flow">
-        <div class="card-head"><h2>Follow the money step by step, ${yearLabel}</h2><span class="muted small">Committees ${esc(name)} funded, and where those committees sent money. Open any pass-through to keep going.</span></div>
+        <div class="card-head"><h2>Follow the money step by step, ${yearLabel}</h2><span class="muted small">First, the committees ${esc(name)} gave to. Then, who those committees gave to. Open any committee that passes money on to keep following it.</span></div>
+        ${trailsCard(data.trails, name, year, yearLabel) ? '' : flowIntro()}
         <div class="flow">
           <div class="flow-step">
             <div class="flow-title"><span class="flow-num">1</span><h3>${esc(name)} gave to ${onward.via.length === 1 ? 'this committee' : `these ${onward.via.length} committees`}</h3></div>
             <ul class="flow-via">${onward.via.map((v, i) => `<li><span class="sw c-${flowColor(i)}"></span><div class="t"><a class="name" href="/filer/${encodeURIComponent(v.filer_id)}?year=${year}" data-link>${esc(niceName(v.name))}</a><div class="sub">received <strong>${moneyShort(v.received)}</strong> from ${esc(name)} · passed on <strong>${moneyShort(v.passed_on)}</strong> to ${int(v.n_recipients)} recipient${v.n_recipients == 1 ? '' : 's'}</div></div></li>`).join('')}</ul>
-            ${data.recipients.filter(isCommittee).length > onward.via.length ? `<p class="muted small">${onward.via.length === 8 ? `The ${onward.via.length} committees that received the most from ${esc(name)}, among those` : 'Only committees'} whose name appears as a donor on other reports${onward.via.length === 8 ? '' : ' can be followed further'}. <a href="#recipients">All recipients ↓</a></p>` : ''}
+            ${data.recipients.filter(isCommittee).length > onward.via.length ? `<p class="muted small">${onward.via.length === 8 ? `Showing the ${onward.via.length} committees that got the most from ${esc(name)} and whose own giving can be traced` : 'Only committees whose own giving shows up in other filings can be followed further'}. <a href="#recipients">All recipients ↓</a></p>` : ''}
           </div>
           <div class="flow-step">
             <div class="flow-title"><span class="flow-num">2</span><h3>${onward.via.length === 1 ? 'That committee' : 'Those committees'} gave to</h3></div>
             <div class="fl-list" id="fl-root">${stepTwo}</div>
-            ${onward.n_recipients > onward.recipients.length ? `<p class="muted small">Top ${onward.recipients.length} of ${int(onward.n_recipients)} recipients${onward.truncated ? ' counted so far' : ''}. Each committee’s page lists all of them.</p>` : ''}
+            ${onward.n_recipients > onward.recipients.length ? `<p class="muted small">The ${onward.recipients.length} largest of ${int(onward.n_recipients)} recipients${onward.truncated ? ' counted so far' : ''}. Each committee’s own page lists all of them.</p>` : ''}
           </div>
         </div>
-        <div class="card-foot"><span>Money is pooled: what a committee passed on came from all of its donors, not only ${esc(name)}, and in ${year === 'all' ? 'the same years' : year} only. Amounts are what each recipient reported receiving. A committee is matched to its own filings by exact name and state, or by a reviewed rule. <a href="/about#following" data-link>How this works</a></span></div>
+        <div class="card-foot"><span>Once money reaches a committee it mixes with everyone else’s, so what a committee passed on was not only ${esc(name)}’s money. Amounts are what each recipient reported receiving${year === 'all' ? '' : ` in ${year}`}. A committee is matched to its own filings by its exact name, or by a rule a person reviewed. <a href="/about#following" data-link>How this works</a></span></div>
       </section>` : ''}
 
       <section class="grid-2">
@@ -639,8 +642,8 @@
         <p>Whether a donor is a political committee comes from the form: Schedule I parts A and C are reserved for committees. Everything else is labeled individual or organization by a keyword heuristic, which the donor page discloses, or by an explicit rule.</p>
         <h2 id="following">Following money between committees</h2>
         <p>The state gives every filer an ID but gives donors none, so when a PAC appears as a contributor on another committee's report it is just a name. To follow money through a PAC, that name has to be tied to the PAC's own filer record. We do that in two ways, and each page says which applied: a <strong>reviewed rule</strong> in <code>cleanup/filer_links.csv</code>, or an <strong>exact match</strong> where the normalized name equals a name exactly one committee filer has used and the states agree. There is no fuzzy matching, and a rule can block an exact match that turns out to be wrong.</p>
-        <p>"Follow the money" on a donor's page then shows two steps: the committees the donor gave to, and what those committees gave onward in the same years, as reported by the recipients. Any committee marked <em>passes money on</em> can be opened to keep going, step by step; a committee that appears again further up its own trail is marked and stops, so loops between committees end there. Money inside a committee is pooled, so each step is what that committee did with all of its money, not with one donor's dollars in particular.</p>
-        <p>"Where the money ended up" walks those steps automatically, up to four deep, and stops at <em>endpoints</em>: a candidate's own committee, or any committee that passed on less than a fifth of what it raised in the window. It skips small transfers (under $100,000 and under 5% of the giver's outflow, outside its five largest) and keeps, for each endpoint, the strongest trail, where a trail is only as strong as its smallest hop. The trail is a route the money could take, with the amount each recipient reported on every hop; it is not a claim that a particular donor's dollars travelled it.</p>
+        <p>"Follow the money step by step" on a donor's page shows the committees the donor gave to, then who those committees gave to in the same years, as reported by the recipients. Any committee marked <em>passes money on</em> can be opened to keep going. A committee that is already earlier on the same path is marked and cannot be opened again, so loops between committees end there. Money inside a committee mixes with everyone else's, so each step is what that committee did with all of its money, not with one donor's dollars.</p>
+        <p>"Where the money ended up" follows those steps automatically, through up to three committees, and stops where the money is spent: at a candidate's own committee, or at any committee that gave other committees less than a fifth of what it raised in that period. Small transfers are skipped (under $100,000 and under 5% of what the giver passed on, unless they are among its five largest), and a hop is skipped if it happened before the money could have arrived. For each place the money ended up, the site keeps the path whose smallest transfer is largest, so a path never depends on one tiny gift. A path is a route the money could have taken, with the amount each recipient reported at every step; it does not claim that a particular donor's dollars travelled it.</p>
         <h2>Proposing a correction</h2>
         <p>Every donor and filer page has a "Suggest a correction" link that opens a prefilled issue${repo ? ` in the <a href="${esc(repo)}" rel="noopener">public repository</a>` : ''}. Corrections live in plain CSV files with a reason and evidence for each row. A continuous check validates every proposed change, and a maintainer reviews merges of people before they go live, because a wrong merge attributes money to the wrong person.</p>
         ${repo ? `<p><a class="btn btn-primary" href="${esc(repo)}/blob/main/cleanup/README.md" rel="noopener">Read the correction rules</a></p>` : ''}
