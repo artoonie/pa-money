@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DELTA="$ROOT/data/cleanup-delta.sql"
 [ -f "$DELTA" ] || { echo "no $DELTA; run python3 pipeline/apply_cleanup.py first" >&2; exit 1; }
-"$ROOT/scripts/deploy-db.sh" --tables lookup,entity,donor_entity,filer_group,filer_link,donor_rank
+"$ROOT/scripts/deploy-db.sh" --tables lookup,entity,donor_entity,filer_group,filer_link,filer_flow,donor_rank
 cd "$ROOT/web"
 npx wrangler d1 execute pa-money --remote --yes --file "$DELTA"
 echo "cleanup deployed; edge caches expire within an hour"

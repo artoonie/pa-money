@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""(Re)build the filer_link table: which donor keys are committees that file their own reports.
+"""(Re)build filer_link (which donor keys are committees that file their own reports) and filer_flow (what each
+filer passed on through those keys).
 
 build.py calls build_filer_links() during the cleanup step; run this directly to refresh the links in a
 database you already have (for example after editing cleanup/filer_links.csv):
@@ -79,6 +80,15 @@ def build_filer_links(db, log=print):
         n_name += 1
     n_missing = len(ruled)
     db.executemany("INSERT INTO filer_link (donor_id, filer_id, source, reason, evidence, submitted_by) VALUES (?,?,?,?,?,?)", rows)
+    db.execute("DELETE FROM filer_flow")
+    db.execute("""
+        INSERT INTO filer_flow (filer_id, eyear, passed_on, n_recipients)
+        SELECT l.filer_id, fd.eyear, SUM(fd.total), COUNT(DISTINCT fd.filer_id)
+        FROM filer_link l JOIN filer_donor_year fd ON fd.donor_id = l.donor_id GROUP BY l.filer_id, fd.eyear""")
+    db.execute("""
+        INSERT INTO filer_flow (filer_id, eyear, passed_on, n_recipients)
+        SELECT l.filer_id, 0, SUM(fd.total), COUNT(DISTINCT fd.filer_id)
+        FROM filer_link l JOIN filer_donor_year fd ON fd.donor_id = l.donor_id GROUP BY l.filer_id""")
     db.commit()
     log(f"filer_link: {n_name:,} by exact name, {n_rule} by rule, {n_blocked} blocked by rule"
         + (f", {n_missing} rule keys not in the data" if n_missing else ""))
@@ -90,11 +100,14 @@ def main():
     ap.add_argument("--db", default=os.path.join(ROOT, "data", "pa.sqlite"))
     args = ap.parse_args()
     db = sqlite3.connect(args.db)
+    schema = open(os.path.join(ROOT, "pipeline", "schema.sql"), encoding="utf-8").read()
     if not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'filer_link'").fetchone():
-        schema = open(os.path.join(ROOT, "pipeline", "schema.sql"), encoding="utf-8").read()
         start = schema.index("CREATE TABLE filer_link")
         end = schema.index("CREATE INDEX filer_link_filer")
         db.executescript(schema[start:schema.index(";", end) + 1])
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'filer_flow'").fetchone():
+        start = schema.index("CREATE TABLE filer_flow")
+        db.executescript(schema[start:schema.index(";", start) + 1])
     for w in build_filer_links(db):
         print("warning:", w)
     n = db.execute("SELECT COUNT(*) FROM filer_link").fetchone()[0]

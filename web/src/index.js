@@ -48,6 +48,7 @@ async function route(url, env) {
   if ((m = p.match(/^\/api\/filer\/([^/]+)\/contributions$/))) return json(await filerContributions(env, decodeURIComponent(m[1]), q));
   if ((m = p.match(/^\/api\/filer\/([^/]+)\/expenses$/))) return json(await filerExpenses(env, decodeURIComponent(m[1]), q));
   if ((m = p.match(/^\/api\/filer\/([^/]+)$/))) return json(await filerPage(env, decodeURIComponent(m[1]), q));
+  if ((m = p.match(/^\/api\/flow\/([^/]+)$/))) return json(await flowPage(env, decodeURIComponent(m[1]), q));
   if ((m = p.match(/^\/api\/donor\/(\d+)$/))) return json(await donorPage(env, Number(m[1]), q));
   if ((m = p.match(/^\/api\/entity\/([^/]+)$/))) return json(await entityPage(env, decodeURIComponent(m[1]), q));
   return null;
@@ -235,6 +236,8 @@ async function filerPage(env, id, q) {
     FROM report WHERE filer_id IN (${ph(ids)}) ${w.clause} ORDER BY eyear, cycle, submitted`, P);
   const [summary, donorsAgg, months, topDonorsRows, largest, payees, reports, links, gaveTo, gaveAgg, lk] =
     await Promise.all([summaryQ, donorsAggQ, monthsQ, topDonorsQ, largestQ, payeesQ, reportsQ, linksQ, gaveToQ, gaveAggQ, lookups(env)]);
+  await annotateEndpoints(env, gaveTo, w);
+  const trails = links.length ? await walkTrails(env, gaveTo, w, ids) : [];
 
   let timeline;
   if (w.year === 'all') {
@@ -258,7 +261,7 @@ async function filerPage(env, id, q) {
     filer, group, combine, ids, years, year: w.year,
     summary: { ...summary, ...donorsAgg },
     timeline, top_donors: topDonorsRows, largest, payees, reports, entities,
-    as_donor: { links, recipients: gaveTo, ...gaveAgg },
+    as_donor: { links, recipients: gaveTo, trails, ...gaveAgg },
     lookups: lk,
   };
 }
@@ -386,7 +389,8 @@ async function donorView(env, members, entity, q, focus = null) {
     FROM filer_link l JOIN filer f ON f.filer_id = l.filer_id WHERE l.donor_id IN (${ph(ids)}) GROUP BY f.filer_id ORDER BY f.total_all DESC`, ids);
   const [summary, recipients, contributions, filers, lk] = await Promise.all([summaryQ, recipientsQ, contributionsQ, filersQ, lookups(env)]);
   const largest = contributions.find((c) => !c.flag) || null;
-  const onward = await onwardFlows(env, recipients, w, filers.map((f) => f.filer_id));
+  const selfIds = filers.map((f) => f.filer_id);
+  const [onward, trails] = await Promise.all([onwardFlows(env, recipients, w, selfIds), walkTrails(env, recipients, w, selfIds)]);
   let rank = null;
   if ((entity ? entity.kind : members[0].kind) === 'individual') {
     const r = await one(env, `SELECT MIN(rank) rank FROM donor_rank WHERE eyear = ? AND kind = 'individual' AND donor_id IN (${ph(ids)})`,
@@ -396,7 +400,7 @@ async function donorView(env, members, entity, q, focus = null) {
   return {
     donor: focus || members[0], entity, members, ids, years, year: w.year,
     summary: { ...summary, n_recipients: recipients.length, largest, rank },
-    recipients, contributions, filers, onward, lookups: lk,
+    recipients, contributions, filers, onward, trails, lookups: lk,
   };
 }
 
@@ -440,6 +444,7 @@ async function onwardFlows(env, recipients, w, selfIds) {
     m.via.push({ filer_id: r.via_id, total: r.total });
   }
   const list = [...merged.values()].sort((a, b) => b.total - a.total);
+  await annotateEndpoints(env, list.slice(0, 15), w);
   return {
     via: viaOut,
     recipients: list.slice(0, 15),
@@ -449,6 +454,145 @@ async function onwardFlows(env, recipients, w, selfIds) {
   };
 }
 
+
+// ---- endpoints and trails ---------------------------------------------------------------
+// A filer is an endpoint when money stops there: a candidate's own record, a committee with no filer_link
+// (so it cannot be followed), or a committee that passed on less than a fifth of what it raised in the window.
+// Everything else is a pass-through and can be expanded.
+const PASS_SHARE = 0.2, PASS_MIN = 10000;
+const isCandidateRecord = (f) => String(f.filer_type || '') === '1';
+
+// D1 allows at most 100 bound parameters per statement, so long id lists are queried in chunks.
+async function allChunked(env, ids, build, chunk = 90) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += chunk) {
+    const part = ids.slice(i, i + chunk);
+    const { sql, params } = build(part);
+    out.push(...(await all(env, sql, params)));
+  }
+  return out;
+}
+
+async function flowStats(env, ids, w) {
+  ids = [...new Set(ids)];
+  if (!ids.length) return {};
+  const yr = w.year === 'all' ? 0 : w.year;
+  const flows = await allChunked(env, ids, (part) => ({ sql: `SELECT filer_id, passed_on, n_recipients FROM filer_flow WHERE eyear = ? AND filer_id IN (${ph(part)})`, params: [yr, ...part] }));
+  const raised = w.year === 'all'
+    ? await allChunked(env, ids, (part) => ({ sql: `SELECT filer_id, total_all total FROM filer WHERE filer_id IN (${ph(part)})`, params: part }))
+    : await allChunked(env, ids, (part) => ({ sql: `SELECT filer_id, total FROM filer_year WHERE eyear = ? AND filer_id IN (${ph(part)})`, params: [w.year, ...part] }));
+  const out = {};
+  for (const r of raised) out[r.filer_id] = { raised: r.total, passed_on: 0, n_recipients: 0, linked: false };
+  for (const f of flows) out[f.filer_id] = { ...(out[f.filer_id] || { raised: 0 }), passed_on: f.passed_on, n_recipients: f.n_recipients, linked: true };
+  return out;
+}
+
+function classify(f, st) {
+  if (isCandidateRecord(f)) return 'candidate';
+  if (!st || !st.linked) return 'unlinked';
+  if (st.passed_on < PASS_MIN || st.passed_on < PASS_SHARE * Math.max(st.raised || 0, 1)) return 'spends';
+  return 'pass';
+}
+
+async function annotateEndpoints(env, rows, w) {
+  const stats = await flowStats(env, rows.map((r) => r.filer_id), w);
+  for (const r of rows) {
+    const st = stats[r.filer_id];
+    r.endpoint = classify(r, st);          // candidate | unlinked | spends | pass
+    r.passed_on = st ? st.passed_on : 0;
+    r.raised = st ? st.raised : null;
+  }
+  return stats;
+}
+
+// Breadth-first walk from a set of first-hop recipients through pass-through committees, at most MAX_HOPS deep.
+// A trail is ranked by its weakest hop (the smallest amount along it), so a $2K gift to a party committee that
+// then gave $11M to a candidate does not outrank a $98M gift that was passed on in full. For every endpoint the
+// strongest trail is kept. Edges are followed when they are large in absolute terms, a meaningful share of the
+// giver's outflow, or among the giver's top few; the same rule applies to the root's own gifts. No proportional
+// attribution: each edge is the amount the recipient reported, and money inside a committee is pooled.
+async function walkTrails(env, firstHop, w, selfIds = []) {
+  const MAX_HOPS = 4, FRONTIER = 30, PER_VIA = 20, TOP_PER_VIA = 5, MIN_EDGE = 100000, MIN_SHARE = 0.05, OUT = 15;
+  const direct = firstHop.filter((r) => !selfIds.includes(r.filer_id)).slice(0, 40);
+  const rootOut = direct.reduce((t, r) => t + r.total, 0);
+  const keep = (amount, outflow, i) => amount >= MIN_EDGE || amount >= MIN_SHARE * outflow || i < TOP_PER_VIA;
+  const level0 = direct.filter((r, i) => keep(r.total, rootOut, i));
+  if (!level0.length) return [];
+  const stats = await annotateEndpoints(env, level0, w);
+  const weakest = (path) => Math.min(...path.map((p) => p.amount));
+  const best = new Map();        // endpoint id -> strongest trail
+  const widest = new Map();      // pass-through id -> bottleneck of the strongest trail that reached it
+  let frontier = [];
+  // arrived: the earliest year money could have reached this node along the trail, i.e. the latest first-year upstream.
+  const node = (r, amount, prev) => ({ filer_id: r.filer_id, name: r.name, filer_type: r.filer_type, office: r.office, district: r.district, party: r.party, city: r.city, state: r.state, amount, endpoint: r.endpoint, fy: r.first_year ?? null, ly: r.last_year ?? null, arrived: Math.max(prev ? prev.arrived : 0, r.first_year || 0) });
+  for (const r of level0) {
+    const path = [node(r, r.total, null)];
+    if (r.endpoint === 'pass') { widest.set(r.filer_id, r.total); frontier.push({ id: r.filer_id, path, outflow: (stats[r.filer_id] || {}).passed_on || 0 }); }
+    else best.set(r.filer_id, { path, hops: 1 });
+  }
+  for (let hop = 2; hop <= MAX_HOPS && frontier.length; hop++) {
+    frontier.sort((a, b) => weakest(b.path) - weakest(a.path));
+    frontier = frontier.slice(0, FRONTIER);
+    const viaIds = frontier.map((f) => f.id);
+    const rows = await all(env, `
+      SELECT l.filer_id via_id, fd.filer_id, f.name, f.filer_type, f.office, f.district, f.party, f.city, f.state, SUM(fd.total) total,
+             MIN(fd.eyear) first_year, MAX(fd.eyear) last_year
+      FROM filer_link l JOIN filer_donor_year fd ON fd.donor_id = l.donor_id JOIN filer f ON f.filer_id = fd.filer_id
+      WHERE l.filer_id IN (${ph(viaIds)}) ${w.clause.replace('eyear', 'fd.eyear')}
+      GROUP BY l.filer_id, fd.filer_id ORDER BY total DESC LIMIT 1500`, [...viaIds, ...w.params]);
+    const byVia = {};
+    for (const r of rows) (byVia[r.via_id] ||= []).push(r);
+    const dstIds = [...new Set(rows.map((r) => r.filer_id))];
+    const dstStats = await flowStats(env, dstIds, w);
+    const next = [];
+    for (const fr of frontier) {
+      const list = (byVia[fr.id] || []).slice(0, PER_VIA);
+      const onPath = new Set(fr.path.map((p) => p.filer_id));
+      const arrived = fr.path[fr.path.length - 1].arrived;   // money reached this giver no earlier than this year
+      list.forEach((r, i) => {
+        if (!keep(r.total, fr.outflow, i)) return;
+        if (onPath.has(r.filer_id) || selfIds.includes(r.filer_id)) return;   // a loop back up this trail
+        if (arrived && r.last_year != null && r.last_year < arrived) return;   // all given away before the money arrived
+        r.endpoint = classify(r, dstStats[r.filer_id]);
+        const path = [...fr.path, node(r, r.total, fr.path[fr.path.length - 1])];
+        if (r.endpoint === 'pass') {
+          // Re-expand a pass-through only when this trail reaches it with a wider bottleneck than any earlier one.
+          const bn = weakest(path);
+          if (!(widest.get(r.filer_id) >= bn)) { widest.set(r.filer_id, bn); next.push({ id: r.filer_id, path, outflow: (dstStats[r.filer_id] || {}).passed_on || 0 }); }
+        } else {
+          const cur = best.get(r.filer_id);
+          if (!cur || weakest(cur.path) < weakest(path)) best.set(r.filer_id, { path, hops: path.length });
+        }
+      });
+    }
+    frontier = next;
+  }
+  return [...best.values()]
+    .sort((a, b) => weakest(b.path) - weakest(a.path) || b.path[b.path.length - 1].amount - a.path[a.path.length - 1].amount)
+    .slice(0, OUT)
+    .map((t) => ({ hops: t.hops, endpoint: t.path[t.path.length - 1], amount: t.path[t.path.length - 1].amount, weakest: weakest(t.path), path: t.path }));
+}
+
+// One committee's onward recipients, for expanding a row in the follow-the-money view.
+async function flowPage(env, id, q) {
+  const filer = await one(env, 'SELECT filer_id, name, filer_type, total_all FROM filer WHERE filer_id = ?', [id]);
+  if (!filer) return { error: 'not found' };
+  const years = await all(env, 'SELECT eyear, passed_on total FROM filer_flow WHERE filer_id = ? AND eyear > 0 ORDER BY eyear', [id]);
+  const w = yearWindow(q, years);
+  const limit = num(q.get('limit'), 25, 100);
+  const P = [id, ...w.params];
+  const [rows, agg] = await Promise.all([
+    all(env, `
+      SELECT f.filer_id, f.name, f.filer_type, f.office, f.district, f.party, f.city, f.state, SUM(fd.total) total, SUM(fd.n) n
+      FROM filer_link l JOIN filer_donor_year fd ON fd.donor_id = l.donor_id JOIN filer f ON f.filer_id = fd.filer_id
+      WHERE l.filer_id = ? ${w.clause.replace('eyear', 'fd.eyear')} GROUP BY f.filer_id ORDER BY total DESC LIMIT ?`, [...P, limit]),
+    one(env, `
+      SELECT COALESCE(SUM(fd.total),0) total, COUNT(DISTINCT fd.filer_id) n_recipients
+      FROM filer_link l JOIN filer_donor_year fd ON fd.donor_id = l.donor_id WHERE l.filer_id = ? ${w.clause.replace('eyear', 'fd.eyear')}`, P),
+  ]);
+  await annotateEndpoints(env, rows, w);
+  return { filer, year: w.year, recipients: rows, ...agg };
+}
 
 // ---- social previews ----------------------------------------------------------------
 // Crawlers do not run the app, so the HTML itself must carry the page's title, description and image.

@@ -220,3 +220,13 @@ CREATE TABLE filer_link (
   submitted_by TEXT
 );
 CREATE INDEX filer_link_filer ON filer_link (filer_id);
+
+-- Per filer: how much other committees reported receiving from it (through filer_link), by year and overall (eyear 0).
+-- The site treats a committee as an endpoint when this is small next to what it raised; otherwise money can be followed through it.
+CREATE TABLE filer_flow (
+  filer_id     TEXT NOT NULL,
+  eyear        INTEGER NOT NULL,
+  passed_on    REAL NOT NULL,
+  n_recipients INTEGER NOT NULL,
+  PRIMARY KEY (filer_id, eyear)
+);

@@ -117,8 +117,18 @@ wrangler's local state are ignored by git.
   name as a contributor on other committees' reports. The build links the two
   when the normalized name matches exactly one committee filer and the states
   agree, or when `cleanup/filer_links.csv` says so. Donor pages use the links to
-  show two steps of "follow the money": the committees a donor funded, and what
-  those committees gave onward, as reported by the recipients.
+  "follow the money": the committees a donor funded, what those committees gave
+  onward, and, by opening any pass-through, as many further steps as the reader
+  wants. A committee already on the trail above is marked and stops, so loops
+  between committees end there.
+- **Endpoints and trails.** A filer is an endpoint when money stops there: a
+  candidate's own record, a committee that never appears as a donor, or a
+  committee that passed on less than a fifth of what it raised (`filer_flow`
+  holds the per-filer figures). "Where the money ended up" walks up to four
+  steps through pass-throughs, skipping small transfers and hops that happened
+  before the money arrived, and keeps for each endpoint the trail whose weakest
+  hop is largest. Money inside a committee is pooled, so a trail is a route with
+  reported amounts, not an attribution of one donor's dollars.
 - **Schedules and cycles.** The export does not document its codes. The labels
   in `cleanup/lookups/` were derived from form DSEB-502 and from filing dates in
   the data, and each one notes how confident we are.

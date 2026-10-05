@@ -3,7 +3,7 @@
 
   python3 pipeline/apply_cleanup.py [--db data/pa.sqlite] [--delta data/cleanup-delta.sql]
 
-Rebuilds the cleanup tables (entity, donor_entity, filer_group, filer_link, lookup, donor_rank) from
+Rebuilds the cleanup tables (entity, donor_entity, filer_group, filer_link, filer_flow, lookup, donor_rank) from
 cleanup/ and updates the affected donor and filer rows. It also writes a small SQL file of UPDATE
 statements for the donor and filer columns that cleanup sets, so the remote database can be patched
 without re-sending the multi-million-row donor table (see scripts/deploy-cleanup.sh).
@@ -50,7 +50,7 @@ def main():
     db = sqlite3.connect(args.db)
     db.execute("PRAGMA cache_size = -400000")
     schema = open(os.path.join(HERE, "schema.sql"), encoding="utf-8").read()
-    for table in ("filer_link", "donor_rank"):
+    for table in ("filer_link", "filer_flow", "donor_rank"):
         if not db.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (table,)).fetchone():
             start = schema.index(f"CREATE TABLE {table}")
             end = schema.index(";", schema.index(")", start))
